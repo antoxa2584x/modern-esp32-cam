@@ -1,0 +1,17 @@
+{
+  "name": "cam-relay",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Remote-access relay for the ESP32-CAM firmware",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test/security.js"
+  },
+  "dependencies": {
+    "ws": "8.18.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

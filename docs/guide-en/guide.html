@@ -1,0 +1,304 @@
+<!doctype html>
+<!-- English setup guide. Rebuild the PDF (from the repo root):
+     "C:/Program Files/Google/Chrome/Application/chrome.exe" --headless --allow-file-access-from-files --no-pdf-header-footer --print-to-pdf=docs/Setup-Guide.pdf docs/guide-en/guide.html
+     Screenshots in img/ come from the demo (dist/camera-demo.html) in English. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ESP32-CAM Security Camera — Setup Guide</title>
+<style>
+  @page { size: A4; margin: 0; }
+  :root { --ink: #1f1636; --muted: #6a5d86; --accent: #6d4bc3; --soft: #f2edfb; --line: #e2d9f3; --warn: #b4542a; --warnbg: #fdf1ea; --ok: #2f7d55; --okbg: #eaf6ef; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font: 11pt/1.55 "Segoe UI", "Noto Sans", Roboto, Arial, sans-serif; color: var(--ink); -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .page { width: 210mm; height: 297mm; padding: 18mm 18mm 16mm; position: relative; page-break-after: always; overflow: hidden; }
+  .page:last-child { page-break-after: auto; }
+  .foot { position: absolute; left: 18mm; right: 18mm; bottom: 9mm; display: flex; justify-content: space-between; font-size: 8.5pt; color: var(--muted); border-top: 1px solid var(--line); padding-top: 3mm; }
+
+  /* cover */
+  .cover { background: linear-gradient(160deg, #5b3fa6 0%, #3a2470 55%, #1e1238 100%); color: #fff; padding: 26mm 20mm; }
+  .cover .logo { width: 30mm; height: 30mm; border-radius: 8mm; background: linear-gradient(145deg, #9b7be0, #6a48c0); display: grid; place-items: center; box-shadow: 0 6mm 14mm rgb(0 0 0 / 30%); }
+  .cover h1 { font-size: 34pt; line-height: 1.1; margin: 14mm 0 4mm; font-weight: 800; letter-spacing: -0.5pt; }
+  .cover .sub { font-size: 15pt; opacity: .85; max-width: 140mm; }
+  .cover .phones { position: absolute; right: 16mm; bottom: 22mm; display: flex; gap: 6mm; align-items: flex-end; }
+  .cover .phones img { width: 52mm; border-radius: 6mm; border: 1.6mm solid #120a24; box-shadow: 0 8mm 18mm rgb(0 0 0 / 45%); }
+  .cover .phones img:first-child { width: 46mm; margin-bottom: 14mm; }
+  .cover .toc { position: absolute; left: 20mm; bottom: 24mm; font-size: 11pt; line-height: 2; opacity: .92; }
+  .cover .toc b { display: inline-block; width: 8mm; color: #c9b5ff; }
+
+  h2 { font-size: 20pt; margin: 0 0 2mm; color: var(--accent); font-weight: 800; letter-spacing: -0.3pt; }
+  h2 .num { display: inline-grid; place-items: center; width: 11mm; height: 11mm; border-radius: 50%; background: var(--accent); color: #fff; font-size: 14pt; margin-right: 3mm; vertical-align: 1mm; }
+  h3 { font-size: 13pt; margin: 6mm 0 2mm; }
+  .lead { color: var(--muted); font-size: 12pt; margin: 0 0 6mm; }
+  p { margin: 0 0 3mm; }
+  ol, ul { margin: 0 0 3mm; padding-left: 6mm; }
+  li { margin-bottom: 1.6mm; }
+  b.ui { background: var(--soft); color: var(--accent); padding: 0 1.6mm; border-radius: 1.2mm; font-weight: 700; white-space: nowrap; }
+  code { font: 10pt Consolas, "Courier New", monospace; background: var(--soft); padding: .3mm 1.5mm; border-radius: 1.2mm; white-space: nowrap; }
+
+  .tip, .warn, .ok { border-radius: 3mm; padding: 3.5mm 4.5mm; margin: 4mm 0; font-size: 10.5pt; display: flex; gap: 3mm; }
+  .tip { background: var(--soft); }
+  .warn { background: var(--warnbg); }
+  .ok { background: var(--okbg); }
+  .tip .ic, .warn .ic, .ok .ic { font-size: 13pt; line-height: 1.3; }
+
+  .row { display: flex; gap: 8mm; align-items: flex-start; }
+  .row .text { flex: 1; }
+  .phone { width: 58mm; flex: none; border-radius: 5mm; border: 1.2mm solid #1d1233; box-shadow: 0 3mm 8mm rgb(40 20 80 / 25%); }
+  .phone.sm { width: 50mm; }
+  .shot { width: 100%; border-radius: 3mm; border: 1px solid var(--line); box-shadow: 0 2mm 6mm rgb(40 20 80 / 15%); }
+  figure { margin: 0; }
+  figcaption { font-size: 9pt; color: var(--muted); text-align: center; margin-top: 2mm; }
+
+  .need { display: grid; grid-template-columns: 1fr 1fr; gap: 4mm; margin: 4mm 0 6mm; }
+  .need > div { border: 1px solid var(--line); border-radius: 3mm; padding: 4mm; display: flex; gap: 3mm; align-items: flex-start; }
+  .need .e { font-size: 18pt; line-height: 1; }
+  .need b { display: block; }
+  .need span { color: var(--muted); font-size: 10pt; }
+
+  .steps2 { display: grid; grid-template-columns: 1fr 1fr; gap: 7mm; }
+  .steps2 .phone { width: 100%; }
+  .stepcap { font-size: 10.5pt; margin-top: 3mm; }
+  .stepcap b { color: var(--accent); }
+
+  table.compact th, table.compact td { padding: 1.8mm 3mm; }
+  table { width: 100%; border-collapse: collapse; font-size: 10.5pt; margin: 3mm 0; }
+  th, td { text-align: left; padding: 2.6mm 3mm; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { background: var(--soft); color: var(--accent); font-weight: 700; }
+  td:first-child { font-weight: 600; width: 38%; }
+</style>
+</head>
+<body>
+
+<!-- Cover -->
+<section class="page cover">
+  <div class="logo"><svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/><circle cx="18" cy="10.5" r=".6" fill="#ff8a9a" stroke="#ff8a9a"/></svg></div>
+  <h1>Security<br>Camera</h1>
+  <div class="sub">Setup and user guide — from first power-on to watching from anywhere</div>
+  <div class="toc">
+    <div><b>1</b>What you need</div>
+    <div><b>2</b>First setup</div>
+    <div><b>3</b>Live view and security</div>
+    <div><b>4</b>Recordings</div>
+    <div><b>5</b>Settings</div>
+    <div><b>6</b>Access from the internet</div>
+    <div><b>7</b>Troubleshooting</div>
+  </div>
+  <div class="phones">
+    <img src="img/w1-welcome.png" alt="">
+    <img src="img/m-home.png" alt="">
+  </div>
+</section>
+
+<!-- What you need -->
+<section class="page">
+  <h2><span class="num">1</span>What you need</h2>
+  <p class="lead">Make sure everything is at hand. The setup itself takes about 5 minutes.</p>
+  <div class="need">
+    <div><span class="e">📷</span><div><b>ESP32-CAM camera</b><span>with the firmware already installed</span></div></div>
+    <div><span class="e">💾</span><div><b>microSD memory card</b><span>up to 32 GB, FAT32 — videos are saved here</span></div></div>
+    <div><span class="e">🔌</span><div><b>5 V power supply</b><span>an ordinary USB phone charger, 1 A or more</span></div></div>
+    <div><span class="e">📱</span><div><b>Phone or computer</b><span>with any browser: Chrome, Safari, Firefox</span></div></div>
+    <div><span class="e">📶</span><div><b>2.4 GHz home Wi-Fi</b><span>and its password. The camera can't see 5 GHz networks</span></div></div>
+    <div><span class="e">🔑</span><div><b>A new password for the camera</b><span>at least 8 characters, not “12345678”</span></div></div>
+  </div>
+
+  <div class="tip"><span class="ic">💡</span><div><b>Where to put the camera.</b> Close enough to the router for a stable Wi-Fi signal. Don't point it at swaying trees or curtains — they can trigger as “motion”.</div></div>
+  <div class="foot"><span>ESP32-CAM Security Camera</span><span>2</span></div>
+</section>
+
+<!-- First setup -->
+<section class="page">
+  <h2><span class="num">2</span>First setup</h2>
+  <p class="lead">The camera creates its own Wi-Fi network that you use to set it up.</p>
+  <div class="row">
+  <div class="text">
+  <h3>Step 1. Turn the camera on</h3>
+  <ol>
+    <li>Insert the memory card into the camera's slot (contacts facing the board).</li>
+    <li>Connect the power. Wait about 10 seconds.</li>
+  </ol>
+
+  <h3>Step 2. Join the camera's network</h3>
+  <ol>
+    <li>On your phone, open <b class="ui">Settings → Wi-Fi</b>.</li>
+    <li>Find the network <code>ESP32-Camera-XXXX</code> (XXXX is four letters or digits) and connect. No password is needed.</li>
+    <li>The setup page <b>opens by itself</b>. If it doesn't, open a browser and go to <code>192.168.4.1</code>.</li>
+  </ol>
+  <div class="warn"><span class="ic">⚠️</span><div>Your phone may say “No internet connection” and offer to disconnect. Choose <b>“Stay connected”</b> — no internet is needed for this step.</div></div>
+  </div>
+  <figure><img class="phone" src="img/w1-welcome.png" alt=""><figcaption>This is the first page.<br>Tap “Start”.</figcaption></figure>
+  </div>
+  <div class="foot"><span>ESP32-CAM Security Camera</span><span>3</span></div>
+</section>
+
+<!-- Wizard -->
+<section class="page">
+  <h3 style="margin-top:0">Step 3. Follow the setup wizard</h3>
+  <p>The wizard has four short steps. Switch the language with the <b class="ui">УКР</b> / <b class="ui">ENG</b> buttons at the top.</p>
+  <div class="steps2">
+    <figure>
+      <img class="phone" src="img/w2-wifi.png" alt="">
+      <div class="stepcap"><b>Wi-Fi.</b> Pick your home network from the list and enter its password. Not in the list? Tap <b class="ui">Type the name</b>.</div>
+    </figure>
+    <figure>
+      <img class="phone" src="img/w3-account.png" alt="">
+      <div class="stepcap"><b>Protect access.</b> Choose a user name and password for the camera. <b>Write them down</b> — you'll need them every time you log in.</div>
+    </figure>
+  </div>
+  <div class="foot"><span>ESP32-CAM Security Camera</span><span>4</span></div>
+</section>
+
+<!-- Done -->
+<section class="page">
+  <div class="row">
+    <img class="phone" src="img/w5-done.png" alt="">
+    <div class="text">
+      <h3 style="margin-top:0">Step 4. Done!</h3>
+      <p>The camera joins your home network and shows <b>its address</b>, for example <code>http://192.168.1.57/</code>.</p>
+      <ol>
+        <li>Tap <b class="ui">Copy the address</b> or take a photo of the screen.</li>
+        <li>Switch your phone back to your <b>home Wi-Fi</b>.</li>
+        <li>Open the address in the browser and log in with your new password.</li>
+        <li>Bookmark the page or add it to the home screen — then the camera opens like an app.</li>
+      </ol>
+      <div class="ok"><span class="ic">✅</span><div>The <code>ESP32-Camera-XXXX</code> network disappears by itself after a few minutes — that's expected.</div></div>
+      <div class="warn"><span class="ic">⚠️</span><div><b>“Couldn't connect”?</b> Usually it's a wrong Wi-Fi password or a 5 GHz network. Tap <b class="ui">Try again</b> and check the password.</div></div>
+      <div class="tip"><span class="ic">💡</span><div>An address like <code>http://camera-xxxx.local/</code> also works on iPhone, Mac and most computers — no need to remember numbers.</div></div>
+    </div>
+  </div>
+
+  <h3>Logging in</h3>
+  <div class="row">
+    <div class="text">
+      <p>The camera asks for your user name and password each time you open it. Your browser can remember them.</p>
+      <p>After several wrong attempts, logging in is paused for a while — this protects against password guessing.</p>
+      <p>Forgot the password? See section <b>7. Troubleshooting</b>.</p>
+    </div>
+    <img class="phone sm" src="img/m-login.png" alt="" style="height:70mm;object-fit:cover;object-position:top">
+  </div>
+  <div class="foot"><span>ESP32-CAM Security Camera</span><span>5</span></div>
+</section>
+
+<!-- Live + security -->
+<section class="page">
+  <h2><span class="num">3</span>Live view and security</h2>
+  <p class="lead">The home screen shows live video and the main security switch.</p>
+  <div class="row">
+    <img class="phone" src="img/m-home.png" alt="">
+    <div class="text">
+      <h3 style="margin-top:0">Buttons under the video</h3>
+      <table>
+        <tr><td>Lamp</td><td>turns on the camera's flash, on boards that have one; brightness is adjustable</td></tr>
+        <tr><td>Snapshot</td><td>saves a photo to your phone</td></tr>
+        <tr><td>Record</td><td>starts recording manually; tap again to stop</td></tr>
+        <tr><td>Full screen</td><td>shows the video full screen</td></tr>
+      </table>
+      <h3>Security</h3>
+      <p>When the <b class="ui">Security</b> switch is on, the camera records video by itself as soon as it sees motion — including a few seconds from <b>before</b> the motion started.</p>
+      <p>While recording, <b class="ui">● Recording</b> lights up at the top and <b class="ui">Motion</b> appears on the video.</p>
+      <div class="tip"><span class="ic">💡</span><div>Further down the home screen: free space on the card, time of the last motion, Wi-Fi signal and the latest recordings.</div></div>
+    </div>
+  </div>
+  <div class="foot"><span>ESP32-CAM Security Camera</span><span>6</span></div>
+</section>
+
+<!-- Recordings -->
+<section class="page">
+  <h2><span class="num">4</span>Recordings</h2>
+  <p class="lead">All videos are stored on the memory card inside the camera — nothing goes to someone else's cloud.</p>
+  <div class="row">
+    <img class="phone" src="img/m-rec.png" alt="">
+    <div class="text">
+      <ul>
+        <li>Recordings are grouped by day: <b>Today</b>, <b>Yesterday</b> and so on.</li>
+        <li>Filter at the top: <b class="ui">All</b>, <b class="ui">Motion</b> or <b class="ui">Manual</b>.</li>
+        <li>Tap a recording to watch it.</li>
+        <li>The bin button next to a day deletes all recordings from that day.</li>
+      </ul>
+      <div class="ok"><span class="ic">♻️</span><div>When the card fills up, <b>the oldest recordings are deleted automatically</b>. You never need to clean up by hand.</div></div>
+    </div>
+  </div>
+  <h3>Player</h3>
+  <div class="row">
+    <div class="text">
+      <ul>
+        <li>The slider seeks; the <b class="ui">1×</b> button changes speed.</li>
+        <li>The ‹ › arrows go to the previous and next recording.</li>
+        <li>At the top: <b>download</b> the file to your phone or computer, <b>delete</b>, <b>close</b>.</li>
+        <li>Downloads are <code>.mp4</code> videos that play on any phone or computer. At home the video is prepared while you wait, about as long as the clip itself, so keep the page open. If a <b class="ui">Save</b> button appears, tap it.</li>
+      </ul>
+    </div>
+    <img class="phone sm" src="img/m-player.png" alt="">
+  </div>
+  <div class="foot"><span>ESP32-CAM Security Camera</span><span>7</span></div>
+</section>
+
+<!-- Settings -->
+<section class="page">
+  <h2><span class="num">5</span>Settings</h2>
+  <p class="lead">The <b class="ui">Settings</b> tab has six sections. Changes are saved immediately.</p>
+  <figure><img class="shot" src="img/d-security.png" alt="" style="width:88%;display:block;margin:0 auto"><figcaption>The Security section on a computer</figcaption></figure>
+  <table class="compact" style="margin-top:4mm">
+    <tr><th>Section</th><th>What you can change</th></tr>
+    <tr><td>Security</td><td>motion sensitivity, how long to keep recording after motion, clip length, lamp while recording</td></tr>
+    <tr><td>Picture</td><td>video quality, brightness, contrast, saturation, mirror and rotate — with a live preview</td></tr>
+    <tr><td>Wi-Fi</td><td>move the camera to another network</td></tr>
+    <tr><td>Remote access</td><td>watching the camera over the internet (see section 6)</td></tr>
+    <tr><td>Account</td><td>change the user name and password, log out</td></tr>
+    <tr><td>Device</td><td>camera name, colour scheme, language, time zone, clearing the card, firmware update, restart</td></tr>
+  </table>
+  <div class="tip"><span class="ic">💡</span><div><b>Recording shadows or trees?</b> Lower the <b class="ui">Motion sensitivity</b>. <b>Missing real motion?</b> Raise it.</div></div>
+  <div class="foot"><span>ESP32-CAM Security Camera</span><span>8</span></div>
+</section>
+
+<!-- Remote -->
+<section class="page">
+  <h2><span class="num">6</span>Access from the internet</h2>
+  <p class="lead">Watch the camera from work or on holiday — no router configuration needed.</p>
+  <figure><img class="shot" src="img/d-remote.png" alt=""><figcaption>Settings → Remote access</figcaption></figure>
+  <ol style="margin-top:5mm">
+    <li>Open <b class="ui">Settings → Remote access</b>.</li>
+    <li>Turn on <b class="ui">Access over the internet</b>.</li>
+    <li>Enter the <b>server</b> address and <b>registration code</b> given to you by whoever set up the camera. (If the camera was prepared in advance, they're already filled in.)</li>
+    <li>When <b class="ui">● Connected</b> appears, copy <b>Your link</b> and open it on your phone. Log in with the same name and password.</li>
+  </ol>
+  <div class="warn"><span class="ic">🔒</span><div><b>The link is the key to your camera.</b> Share it only with people you trust. If it ends up in the wrong hands, open <b class="ui">Advanced</b> and tap <b class="ui">New link</b> — the old one stops working immediately.</div></div>
+  <div class="foot"><span>ESP32-CAM Security Camera</span><span>9</span></div>
+</section>
+
+<!-- Troubleshooting -->
+<section class="page">
+  <h2><span class="num">7</span>Troubleshooting</h2>
+  <p class="lead">Answers to the most common questions.</p>
+
+  <h3>Forgot the password</h3>
+  <div class="tip" style="background:#efe8fd"><span class="ic">🔁</span><div>
+    <ol style="margin:0">
+      <li>Press the <b>RST</b> button on the camera <b>three times in a row</b>, about a second apart.</li>
+      <li>The camera opens the <code>ESP32-Camera-XXXX</code> network again.</li>
+      <li>Connect to it — a page opens where you can set a new login, password and, if needed, Wi-Fi.</li>
+    </ol>
+    <p style="margin:2mm 0 0"><b>Recordings on the memory card are kept.</b></p>
+  </div></div>
+
+  <table class="compact">
+    <tr><th>Problem</th><th>What to do</th></tr>
+    <tr><td>I can't see the ESP32-Camera-XXXX network</td><td>Wait a minute after powering on. Check the power supply: a weak charger is the most common cause of restarts.</td></tr>
+    <tr><td>The setup page didn't open by itself</td><td>Open a browser and go to <code>192.168.4.1</code>.</td></tr>
+    <tr><td>The camera won't connect to Wi-Fi</td><td>Check the password. The camera works with 2.4 GHz only — make sure that band is enabled on the router.</td></tr>
+    <tr><td>The camera's address won't open</td><td>Your phone must be on the same home network as the camera. Try the numeric address <code>http://192.168.x.x/</code>.</td></tr>
+    <tr><td>Wi-Fi is gone, or the camera moved</td><td>After a minute the camera opens <code>ESP32-Camera-XXXX</code>. Join it, log in with your usual password and, if needed, choose the new network in <b class="ui">Settings → Wi-Fi</b>. The internet link stays the same.</td></tr>
+    <tr><td>“Too many failed attempts”</td><td>Several wrong passwords were entered. Wait the time shown and try again.</td></tr>
+    <tr><td>No recordings appear</td><td>Check that <b>Security</b> is on and the memory card is inserted (up to 32 GB, FAT32).</td></tr>
+    <tr><td>Too many unwanted recordings</td><td>Lower the motion sensitivity and remove things that move in the wind from the view.</td></tr>
+    <tr><td>The picture is upside down</td><td><b class="ui">Settings → Picture</b>: turn on <b>Flip</b> and <b>Mirror</b>.</td></tr>
+    <tr><td>Dark or washed-out picture</td><td><b class="ui">Settings → Picture</b>: brightness and contrast.</td></tr>
+  </table>
+
+  <div class="foot"><span>ESP32-CAM Security Camera</span><span>10</span></div>
+</section>
+
+</body>
+</html>

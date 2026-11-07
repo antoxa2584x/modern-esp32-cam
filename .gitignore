@@ -1,0 +1,8 @@
+.pio/
+.vscode/
+src/web_assets.h
+relay/node_modules/
+relay/data/
+relay/*.log
+dist/
+local/

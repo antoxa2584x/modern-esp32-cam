@@ -1,0 +1,305 @@
+<!doctype html>
+<!-- Ukrainian setup guide. Rebuild the PDF (from the repo root):
+     "C:/Program Files/Google/Chrome/Application/chrome.exe" --headless --allow-file-access-from-files --no-pdf-header-footer --print-to-pdf=docs/Інструкція-з-налаштування.pdf docs/guide-uk/guide.html
+     Screenshots in img/ come from the demo (dist/camera-demo.html) in Ukrainian. -->
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<title>Камера ESP32-CAM — інструкція з налаштування</title>
+<style>
+  @page { size: A4; margin: 0; }
+  :root { --ink: #1f1636; --muted: #6a5d86; --accent: #6d4bc3; --soft: #f2edfb; --line: #e2d9f3; --warn: #b4542a; --warnbg: #fdf1ea; --ok: #2f7d55; --okbg: #eaf6ef; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font: 11pt/1.55 "Segoe UI", "Noto Sans", Roboto, Arial, sans-serif; color: var(--ink); -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .page { width: 210mm; height: 297mm; padding: 18mm 18mm 16mm; position: relative; page-break-after: always; overflow: hidden; }
+  .page:last-child { page-break-after: auto; }
+  .foot { position: absolute; left: 18mm; right: 18mm; bottom: 9mm; display: flex; justify-content: space-between; font-size: 8.5pt; color: var(--muted); border-top: 1px solid var(--line); padding-top: 3mm; }
+
+  /* cover */
+  .cover { background: linear-gradient(160deg, #5b3fa6 0%, #3a2470 55%, #1e1238 100%); color: #fff; padding: 26mm 20mm; }
+  .cover .logo { width: 30mm; height: 30mm; border-radius: 8mm; background: linear-gradient(145deg, #9b7be0, #6a48c0); display: grid; place-items: center; box-shadow: 0 6mm 14mm rgb(0 0 0 / 30%); }
+  .cover h1 { font-size: 34pt; line-height: 1.1; margin: 14mm 0 4mm; font-weight: 800; letter-spacing: -0.5pt; }
+  .cover .sub { font-size: 15pt; opacity: .85; max-width: 140mm; }
+  .cover .phones { position: absolute; right: 16mm; bottom: 22mm; display: flex; gap: 6mm; align-items: flex-end; }
+  .cover .phones img { width: 52mm; border-radius: 6mm; border: 1.6mm solid #120a24; box-shadow: 0 8mm 18mm rgb(0 0 0 / 45%); }
+  .cover .phones img:first-child { width: 46mm; margin-bottom: 14mm; }
+  .cover .toc { position: absolute; left: 20mm; bottom: 24mm; font-size: 11pt; line-height: 2; opacity: .92; }
+  .cover .toc b { display: inline-block; width: 8mm; color: #c9b5ff; }
+
+  h2 { font-size: 20pt; margin: 0 0 2mm; color: var(--accent); font-weight: 800; letter-spacing: -0.3pt; }
+  h2 .num { display: inline-grid; place-items: center; width: 11mm; height: 11mm; border-radius: 50%; background: var(--accent); color: #fff; font-size: 14pt; margin-right: 3mm; vertical-align: 1mm; }
+  h3 { font-size: 13pt; margin: 6mm 0 2mm; }
+  .lead { color: var(--muted); font-size: 12pt; margin: 0 0 6mm; }
+  p { margin: 0 0 3mm; }
+  ol, ul { margin: 0 0 3mm; padding-left: 6mm; }
+  li { margin-bottom: 1.6mm; }
+  b.ui { background: var(--soft); color: var(--accent); padding: 0 1.6mm; border-radius: 1.2mm; font-weight: 700; white-space: nowrap; }
+  code { font: 10pt Consolas, "Courier New", monospace; background: var(--soft); padding: .3mm 1.5mm; border-radius: 1.2mm; white-space: nowrap; }
+
+  .tip, .warn, .ok { border-radius: 3mm; padding: 3.5mm 4.5mm; margin: 4mm 0; font-size: 10.5pt; display: flex; gap: 3mm; }
+  .tip { background: var(--soft); }
+  .warn { background: var(--warnbg); }
+  .ok { background: var(--okbg); }
+  .tip .ic, .warn .ic, .ok .ic { font-size: 13pt; line-height: 1.3; }
+
+  .row { display: flex; gap: 8mm; align-items: flex-start; }
+  .row .text { flex: 1; }
+  .phone { width: 58mm; flex: none; border-radius: 5mm; border: 1.2mm solid #1d1233; box-shadow: 0 3mm 8mm rgb(40 20 80 / 25%); }
+  .phone.sm { width: 50mm; }
+  .shot { width: 100%; border-radius: 3mm; border: 1px solid var(--line); box-shadow: 0 2mm 6mm rgb(40 20 80 / 15%); }
+  figure { margin: 0; }
+  figcaption { font-size: 9pt; color: var(--muted); text-align: center; margin-top: 2mm; }
+
+  .need { display: grid; grid-template-columns: 1fr 1fr; gap: 4mm; margin: 4mm 0 6mm; }
+  .need > div { border: 1px solid var(--line); border-radius: 3mm; padding: 4mm; display: flex; gap: 3mm; align-items: flex-start; }
+  .need .e { font-size: 18pt; line-height: 1; }
+  .need b { display: block; }
+  .need span { color: var(--muted); font-size: 10pt; }
+
+  .steps2 { display: grid; grid-template-columns: 1fr 1fr; gap: 7mm; }
+  .steps2 .phone { width: 100%; }
+  .stepcap { font-size: 10.5pt; margin-top: 3mm; }
+  .stepcap b { color: var(--accent); }
+
+  table.compact th, table.compact td { padding: 1.8mm 3mm; }
+  table { width: 100%; border-collapse: collapse; font-size: 10.5pt; margin: 3mm 0; }
+  th, td { text-align: left; padding: 2.6mm 3mm; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { background: var(--soft); color: var(--accent); font-weight: 700; }
+  td:first-child { font-weight: 600; width: 38%; }
+</style>
+</head>
+<body>
+
+<!-- 1. Cover -->
+<section class="page cover">
+  <div class="logo"><svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/><circle cx="18" cy="10.5" r=".6" fill="#ff8a9a" stroke="#ff8a9a"/></svg></div>
+  <h1>Камера<br>спостереження</h1>
+  <div class="sub">Інструкція з налаштування та користування — від першого увімкнення до перегляду з будь-якого місця</div>
+  <div class="toc">
+    <div><b>1</b>Що потрібно</div>
+    <div><b>2</b>Перше налаштування</div>
+    <div><b>3</b>Перегляд і охорона</div>
+    <div><b>4</b>Записи</div>
+    <div><b>5</b>Налаштування</div>
+    <div><b>6</b>Доступ з інтернету</div>
+    <div><b>7</b>Якщо щось не так</div>
+  </div>
+  <div class="phones">
+    <img src="img/w1-welcome.png" alt="">
+    <img src="img/m-home.png" alt="">
+  </div>
+</section>
+
+<!-- 2. What you need + power on -->
+<section class="page">
+  <h2><span class="num">1</span>Що потрібно</h2>
+  <p class="lead">Перевірте, що все під рукою. Саме налаштування займає 5 хвилин.</p>
+  <div class="need">
+    <div><span class="e">📷</span><div><b>Камера ESP32-CAM</b><span>з уже встановленою програмою</span></div></div>
+    <div><span class="e">💾</span><div><b>Карта пам'яті microSD</b><span>до 32 ГБ, формат FAT32 — на неї пишуться відео</span></div></div>
+    <div><span class="e">🔌</span><div><b>Блок живлення 5 В</b><span>звичайна USB-зарядка від телефону, 1 А або більше</span></div></div>
+    <div><span class="e">📱</span><div><b>Телефон або комп'ютер</b><span>з будь-яким браузером: Chrome, Safari, Firefox</span></div></div>
+    <div><span class="e">📶</span><div><b>Домашній Wi-Fi 2,4 ГГц</b><span>і пароль від нього. Мережі 5 ГГц камера не бачить</span></div></div>
+    <div><span class="e">🔑</span><div><b>Новий пароль для камери</b><span>щонайменше 8 символів, не «12345678»</span></div></div>
+  </div>
+
+  <div class="tip"><span class="ic">💡</span><div><b>Де поставити камеру.</b> Ближче до роутера, щоб сигнал Wi-Fi був стабільний. Не направляйте об'єктив на дерева та штори, що колишуться, — вони можуть спрацьовувати як «рух».</div></div>
+
+  <div class="foot"><span>Камера спостереження ESP32-CAM</span><span>2</span></div>
+</section>
+
+<section class="page">
+  <h2><span class="num">2</span>Перше налаштування</h2>
+  <p class="lead">Камера сама створює власну мережу Wi-Fi, через яку її налаштовують.</p>
+
+  <div class="row">
+  <div class="text">
+  <h3>Крок 1. Увімкніть камеру</h3>
+  <ol>
+    <li>Вставте карту пам'яті в слот камери (контактами до плати).</li>
+    <li>Підключіть живлення. Зачекайте приблизно 10 секунд.</li>
+  </ol>
+
+  <h3>Крок 2. Підключіться до мережі камери</h3>
+  <ol>
+    <li>На телефоні відкрийте <b class="ui">Налаштування → Wi-Fi</b>.</li>
+    <li>Знайдіть мережу <code>ESP32-Camera-XXXX</code> (замість XXXX — чотири літери або цифри) і підключіться. Пароль не потрібен.</li>
+    <li>Сторінка налаштування <b>відкриється сама</b>. Якщо ні — відкрийте браузер і введіть адресу <code>192.168.4.1</code>.</li>
+  </ol>
+  <div class="warn"><span class="ic">⚠️</span><div>Телефон може написати «Немає підключення до інтернету» і запропонувати відключитися. Натисніть <b>«Залишатися підключеним»</b> — інтернет на цьому етапі не потрібен.</div></div>
+  </div>
+  <figure><img class="phone" src="img/w1-welcome.png" alt=""><figcaption>Так виглядає перша сторінка.<br>Натисніть «Почати».</figcaption></figure>
+  </div>
+  <div class="foot"><span>Камера спостереження ESP32-CAM</span><span>3</span></div>
+</section>
+
+<!-- 3. Wizard -->
+<section class="page">
+  <h3 style="margin-top:0">Крок 3. Пройдіть майстер налаштування</h3>
+  <p>Майстер має чотири короткі кроки. Мову можна змінити кнопками <b class="ui">УКР</b> / <b class="ui">ENG</b> угорі.</p>
+  <div class="steps2">
+    <figure>
+      <img class="phone" src="img/w2-wifi.png" alt="">
+      <div class="stepcap"><b>Wi-Fi.</b> Оберіть свою домашню мережу зі списку та введіть пароль від неї. Немає в списку? Натисніть <b class="ui">Ввести назву вручну</b>.</div>
+    </figure>
+    <figure>
+      <img class="phone" src="img/w3-account.png" alt="">
+      <div class="stepcap"><b>Захист доступу.</b> Придумайте ім'я та пароль для входу в камеру. <b>Запишіть їх</b> — вони знадобляться щоразу при вході.</div>
+    </figure>
+  </div>
+  <div class="foot"><span>Камера спостереження ESP32-CAM</span><span>4</span></div>
+</section>
+
+<!-- 4. Done -->
+<section class="page">
+  <div class="row">
+    <img class="phone" src="img/w5-done.png" alt="">
+    <div class="text">
+      <h3 style="margin-top:0">Крок 4. Готово!</h3>
+      <p>Камера підключиться до домашньої мережі й покаже <b>свою адресу</b>, наприклад <code>http://192.168.1.57/</code>.</p>
+      <ol>
+        <li>Натисніть <b class="ui">Скопіювати адресу</b> або сфотографуйте екран.</li>
+        <li>Поверніть телефон до <b>домашнього Wi-Fi</b>.</li>
+        <li>Відкрийте адресу в браузері та увійдіть із новим паролем.</li>
+        <li>Додайте сторінку в закладки або на головний екран — так камера відкриватиметься як застосунок.</li>
+      </ol>
+      <div class="ok"><span class="ic">✅</span><div>Мережа <code>ESP32-Camera-XXXX</code> зникне сама через кілька хвилин — так і має бути.</div></div>
+      <div class="warn"><span class="ic">⚠️</span><div><b>«Не вдалося підключитися»?</b> Найчастіше це неправильний пароль Wi-Fi або мережа 5 ГГц. Натисніть <b class="ui">Спробувати ще раз</b> і перевірте пароль.</div></div>
+      <div class="tip"><span class="ic">💡</span><div>Адреса виду <code>http://camera-xxxx.local/</code> теж працює на iPhone, Mac і більшості комп'ютерів — її не треба запам'ятовувати.</div></div>
+    </div>
+  </div>
+
+  <h3>Вхід у камеру</h3>
+  <div class="row">
+    <div class="text">
+      <p>Щоразу при відкритті камера питає ім'я та пароль. Браузер може їх запам'ятати.</p>
+      <p>Після кількох невдалих спроб вхід тимчасово блокується — це захист від підбору пароля. Зачекайте кілька хвилин.</p>
+      <p>Забули пароль? Дивіться розділ <b>7. Якщо щось не так</b>.</p>
+    </div>
+    <img class="phone sm" src="img/m-login.png" alt="" style="height:70mm;object-fit:cover;object-position:top">
+  </div>
+  <div class="foot"><span>Камера спостереження ESP32-CAM</span><span>5</span></div>
+</section>
+
+<!-- 5. Live + security -->
+<section class="page">
+  <h2><span class="num">3</span>Перегляд і охорона</h2>
+  <p class="lead">Головний екран — це живе відео та головний вимикач охорони.</p>
+  <div class="row">
+    <img class="phone" src="img/m-home.png" alt="">
+    <div class="text">
+      <h3 style="margin-top:0">Кнопки під відео</h3>
+      <table>
+        <tr><td>Ліхтарик</td><td>вмикає спалах камери, якщо він є на платі; яскравість налаштовується</td></tr>
+        <tr><td>Знімок</td><td>зберігає фото на телефон</td></tr>
+        <tr><td>Записати</td><td>починає запис вручну; натисніть ще раз, щоб зупинити</td></tr>
+        <tr><td>Весь екран</td><td>відео на весь екран</td></tr>
+      </table>
+      <h3>Охорона</h3>
+      <p>Коли перемикач <b class="ui">Охорона</b> увімкнено, камера сама записує відео, щойно бачить рух, — разом із кількома секундами <b>до</b> появи руху.</p>
+      <p>Під час запису вгорі світиться позначка <b class="ui">● Запис</b>, а на відео — <b class="ui">Рух</b>.</p>
+      <div class="tip"><span class="ic">💡</span><div>Нижче на головному екрані: вільне місце на карті, час останнього руху, сила сигналу Wi-Fi та останні записи.</div></div>
+    </div>
+  </div>
+  <div class="foot"><span>Камера спостереження ESP32-CAM</span><span>6</span></div>
+</section>
+
+<!-- 6. Recordings -->
+<section class="page">
+  <h2><span class="num">4</span>Записи</h2>
+  <p class="lead">Усі відео зберігаються на карті пам'яті в камері — нічого не йде в чужу «хмару».</p>
+  <div class="row">
+    <img class="phone" src="img/m-rec.png" alt="">
+    <div class="text">
+      <ul>
+        <li>Записи згруповані по днях: <b>Сьогодні</b>, <b>Вчора</b> і далі.</li>
+        <li>Фільтр угорі: <b class="ui">Усі</b>, <b class="ui">Рух</b> або <b class="ui">Вручну</b>.</li>
+        <li>Натисніть на запис, щоб переглянути його.</li>
+        <li>Кнопка з кошиком біля дня видаляє всі записи за цей день.</li>
+      </ul>
+      <div class="ok"><span class="ic">♻️</span><div>Коли карта заповнюється, <b>найстаріші записи видаляються автоматично</b>. Нічого чистити вручну не потрібно.</div></div>
+    </div>
+  </div>
+  <h3>Програвач</h3>
+  <div class="row">
+    <div class="text">
+      <ul>
+        <li>Повзунок — перемотування; кнопка <b class="ui">1×</b> — швидкість.</li>
+        <li>Стрілки ‹ › — попередній і наступний запис.</li>
+        <li>Угорі: <b>завантажити</b> файл на телефон чи комп'ютер, <b>видалити</b>, <b>закрити</b>.</li>
+        <li>Завантажується відео <code>.mp4</code>, яке відкривається на будь-якому телефоні чи комп'ютері. Удома відео готується, поки ви чекаєте, — приблизно стільки, скільки триває запис, тож не закривайте сторінку. Якщо з'явиться кнопка <b class="ui">Зберегти</b>, натисніть її.</li>
+      </ul>
+    </div>
+    <img class="phone sm" src="img/m-player.png" alt="">
+  </div>
+  <div class="foot"><span>Камера спостереження ESP32-CAM</span><span>7</span></div>
+</section>
+
+<!-- 7. Settings -->
+<section class="page">
+  <h2><span class="num">5</span>Налаштування</h2>
+  <p class="lead">Вкладка <b class="ui">Налаштування</b> має шість розділів. Зміни зберігаються одразу.</p>
+  <figure><img class="shot" src="img/d-security.png" alt="" style="width:88%;display:block;margin:0 auto"><figcaption>Розділ «Охорона» на комп'ютері</figcaption></figure>
+  <table class="compact" style="margin-top:4mm">
+    <tr><th>Розділ</th><th>Що там можна змінити</th></tr>
+    <tr><td>Охорона</td><td>чутливість до руху, скільки писати після руху, тривалість запису, ліхтарик під час запису</td></tr>
+    <tr><td>Зображення</td><td>якість відео, яскравість, контраст, насиченість, дзеркало й поворот — з живим переглядом</td></tr>
+    <tr><td>Wi-Fi</td><td>перепідключити камеру до іншої мережі</td></tr>
+    <tr><td>Віддалений доступ</td><td>перегляд камери з інтернету (див. розділ 6)</td></tr>
+    <tr><td>Обліковий запис</td><td>змінити ім'я користувача та пароль, вийти</td></tr>
+    <tr><td>Пристрій</td><td>назва камери, колір оформлення, мова, часовий пояс, очищення карти, оновлення програми, перезавантаження</td></tr>
+  </table>
+  <div class="tip"><span class="ic">💡</span><div><b>Камера записує через тіні чи дерева?</b> Зменште <b class="ui">Чутливість до руху</b>. <b>Пропускає рух?</b> Збільште її.</div></div>
+  <div class="foot"><span>Камера спостереження ESP32-CAM</span><span>8</span></div>
+</section>
+
+<!-- 8. Remote -->
+<section class="page">
+  <h2><span class="num">6</span>Доступ з інтернету</h2>
+  <p class="lead">Дивіться камеру з роботи чи у відпустці — без налаштування роутера.</p>
+  <figure><img class="shot" src="img/d-remote.png" alt=""><figcaption>Налаштування → Віддалений доступ</figcaption></figure>
+  <ol style="margin-top:5mm">
+    <li>Відкрийте <b class="ui">Налаштування → Віддалений доступ</b>.</li>
+    <li>Увімкніть <b class="ui">Доступ через інтернет</b>.</li>
+    <li>Введіть <b>адресу сервера</b> та <b>код підключення</b>, які вам дав той, хто встановлював камеру. (Якщо камеру готували заздалегідь, вони вже заповнені.)</li>
+    <li>Коли з'явиться позначка <b class="ui">● Підключено</b>, скопіюйте <b>Ваше посилання</b> і відкрийте його на телефоні. Вхід — тим самим ім'ям і паролем.</li>
+  </ol>
+  <div class="warn"><span class="ic">🔒</span><div><b>Посилання — це ключ від камери.</b> Діліться ним лише з тими, кому довіряєте. Якщо посилання потрапило не туди — у розділі <b class="ui">Додатково</b> натисніть <b class="ui">Нове посилання</b>: старе одразу перестане працювати.</div></div>
+  <div class="foot"><span>Камера спостереження ESP32-CAM</span><span>9</span></div>
+</section>
+
+<!-- 9. Troubleshooting -->
+<section class="page">
+  <h2><span class="num">7</span>Якщо щось не так</h2>
+  <p class="lead">Відповіді на найчастіші питання.</p>
+
+  <h3>Забули пароль</h3>
+  <div class="tip" style="background:#efe8fd"><span class="ic">🔁</span><div>
+    <ol style="margin:0">
+      <li>Натисніть кнопку <b>RST</b> на камері <b>тричі поспіль</b>, з паузою приблизно в секунду.</li>
+      <li>Камера знову відкриє мережу <code>ESP32-Camera-XXXX</code>.</li>
+      <li>Підключіться до неї — відкриється сторінка, де можна задати новий логін, пароль і за потреби Wi-Fi.</li>
+    </ol>
+    <p style="margin:2mm 0 0"><b>Записи на карті пам'яті збережуться.</b></p>
+  </div></div>
+
+  <table class="compact">
+    <tr><th>Проблема</th><th>Що зробити</th></tr>
+    <tr><td>Не бачу мережу ESP32-Camera-XXXX</td><td>Зачекайте хвилину після увімкнення. Перевірте живлення: слабка зарядка — найчастіша причина перезавантажень.</td></tr>
+    <tr><td>Сторінка налаштування не відкрилася сама</td><td>Відкрийте браузер і введіть <code>192.168.4.1</code>.</td></tr>
+    <tr><td>Камера не підключається до Wi-Fi</td><td>Перевірте пароль. Камера працює лише з 2,4 ГГц — увімкніть цей діапазон на роутері.</td></tr>
+    <tr><td>Не відкривається адреса камери</td><td>Телефон має бути в тій самій домашній мережі, що й камера. Спробуйте адресу виду <code>http://192.168.x.x/</code>.</td></tr>
+    <tr><td>Wi-Fi зник або камеру перенесли</td><td>Через хвилину камера відкриє мережу <code>ESP32-Camera-XXXX</code>. Підключіться до неї, увійдіть зі своїм паролем і за потреби виберіть нову мережу в <b class="ui">Налаштування → Wi-Fi</b>. Посилання для інтернету не зміниться.</td></tr>
+    <tr><td>«Забагато невдалих спроб»</td><td>Було введено кілька неправильних паролів. Зачекайте вказаний час і спробуйте знову.</td></tr>
+    <tr><td>Записи не з'являються</td><td>Перевірте, що <b>Охорона</b> увімкнена, а карта пам'яті вставлена (до 32 ГБ, FAT32).</td></tr>
+    <tr><td>Забагато зайвих записів</td><td>Зменште чутливість до руху та приберіть з кадру те, що рухається від вітру.</td></tr>
+    <tr><td>Зображення догори дриґом</td><td><b class="ui">Налаштування → Зображення</b>: увімкніть <b>Перевернути</b> і <b>Віддзеркалити</b>.</td></tr>
+    <tr><td>Темне чи блякле зображення</td><td><b class="ui">Налаштування → Зображення</b>: яскравість і контраст.</td></tr>
+  </table>
+
+  <div class="foot"><span>Камера спостереження ESP32-CAM</span><span>10</span></div>
+</section>
+
+</body>
+</html>

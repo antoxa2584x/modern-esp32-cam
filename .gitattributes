@@ -1,0 +1,7 @@
+# Keep line endings as they are in the files (LF), on every OS
+* text=auto eol=lf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+*.jpg binary
+*.png binary
+*.pdf binary

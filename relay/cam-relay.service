@@ -1,0 +1,19 @@
+[Unit]
+Description=ESP32 camera remote-access relay
+After=network.target
+
+[Service]
+# Adjust the paths and the public address to your server
+WorkingDirectory=/opt/cam-relay
+ExecStart=/usr/bin/node server.js
+Environment=PORT=3040
+Environment=PUBLIC_BASE=https://cam.example.com
+# RELAY_TOKEN=<registration code for cameras>
+EnvironmentFile=/opt/cam-relay/.env
+Restart=always
+RestartSec=3
+StandardOutput=append:/opt/cam-relay/relay.log
+StandardError=append:/opt/cam-relay/relay.log
+
+[Install]
+WantedBy=multi-user.target
