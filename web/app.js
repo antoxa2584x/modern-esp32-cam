@@ -1301,11 +1301,15 @@ const recEvents = new EventTarget();
 
 const faceName = e => e.name || t('Незнайомець');
 
-function faceWhen(e) {
-    if (!e.time) return fmtAgo(e.ago);
-    const d = new Date(e.time * 1000);
+// "14:05" today, else "3 лист., 14:05"
+function fmtWhen(epoch) {
+    const d = new Date(epoch * 1000);
     const today = d.toDateString() === new Date().toDateString();
     return d.toLocaleString(LOCALE, today ? { hour: '2-digit', minute: '2-digit' } : { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+function faceWhen(e) {
+    return e.time ? fmtWhen(e.time) : fmtAgo(e.ago);
 }
 
 function faceEventCard(e) {
@@ -1331,6 +1335,35 @@ function faceEventsDialog(list) {
         h('div', { class: 'clips' }, list.map(e => faceEventCard(e))),
         h('p', { class: 'tip', style: { marginTop: '14px' } }, icon('clock', 'sm'), t('Камера пам\'ятає останні 100 появ. З картою пам\'яті вони зберігаються й після перезавантаження.')));
     const close = overlay(d);
+}
+
+// ---------- logins: shared bits ----------
+
+// The relay sends "City, Region, CC" (URL-encoded); at home there is no place
+function placeText(e) {
+    if (!e.remote) return t('Домашня мережа');
+    let parts = [];
+    try { parts = decodeURIComponent(e.place || '').split(', ').filter(Boolean); } catch (ex) { /* cut short */ }
+    const cc = parts[parts.length - 1];
+    if (cc && /^[A-Z]{2}$/.test(cc)) {
+        try { parts[parts.length - 1] = new Intl.DisplayNames([LOCALE], { type: 'region' }).of(cc); } catch (ex) { /* old browser */ }
+    }
+    return parts.length ? parts.join(', ') : t('Через інтернет');
+}
+
+// One login (history) or one logged-in device (session)
+function loginRow(e, { current, action } = {}) {
+    const bad = e.ok === false;
+    const title = bad ? (e.n > 1 ? t('Невірний пароль ({n} {u})', { n: e.n, u: pl(e.n, 'try') }) : t('Невірний пароль')) : (e.dev || t('Невідомий пристрій'));
+    const when = e.seen !== undefined
+        ? (current ? t('зараз') : e.seen ? t('востаннє {x}', { x: fmtWhen(e.seen) }) : '')
+        : (e.at ? fmtWhen(e.at) : '');
+    return h('div', { class: 'login' + (bad ? ' bad' : '') },
+        h('span', { class: 'ico' }, icon(bad ? 'alert' : e.remote ? 'globe' : 'home')),
+        h('div', { class: 'grow' },
+            h('div', { class: 'value' }, title, current ? h('span', { class: 'pill on', text: t('Цей пристрій') }) : null),
+            h('div', { class: 'faint small', text: [bad ? e.dev : '', placeText(e), e.ip, when].filter(Boolean).join(' · ') })),
+        action || null);
 }
 
 function openPlayer(item, list) {
@@ -1690,17 +1723,37 @@ function homePage() {
         faceTimer = setTimeout(pollFaces, REMOTE ? 1500 : 700);
     }
 
+    // Logins of the last day from other devices
+    const loginList = h('div', { class: 'login-list' });
+    const loginsCard = h('section', { class: 'card hidden' },
+        h('div', { class: 'card-head' }, h('h2', { text: t('Нещодавні входи') }),
+            h('a', { class: 'btn ghost', href: '#/settings', onclick: () => localStorageSet('settingsSection', 'account') }, t('Усі'), icon('chevron', 'sm'))),
+        loginList);
+    let loginKey = null, loginAt = 0;
+    async function loadLogins(key) {
+        loginKey = key;
+        loginAt = Date.now();
+        try {
+            const r = await api('api/logins');
+            const mine = (r.sessions.find(x => x.current) || {}).id;
+            const since = Date.now() / 1000 - 86400;
+            const list = r.history.filter(e => e.at > since && !(e.id && e.id === mine)).slice(0, 3);
+            loginsCard.classList.toggle('hidden', !list.length);
+            loginList.replaceChildren(...list.map(e => loginRow(e)));
+        } catch (e) { loginKey = null; }
+    }
+
     // Recent recordings
     const strip = h('div', { class: 'strip' });
     const recentCard = h('section', { class: 'card' },
         h('div', { class: 'card-head' }, h('h2', { text: t('Останні записи') }), h('a', { class: 'btn ghost', href: '#/rec' }, t('Усі'), icon('chevron', 'sm'))),
         strip);
     let recentList = [];
-    let recentKey = '';
+    let recentKey = null; // null: unknown, must be loaded
     let recentAt = 0;
     // Listing the card is slow-ish: refresh on changes, else every 30 s
     async function loadRecent(force) {
-        if (!force && recentKey && Date.now() - recentAt < 30000) return;
+        if (!force && recentKey !== null && Date.now() - recentAt < 30000) return;
         recentAt = Date.now();
         try {
             const r = await api('api/rec/recent?n=4');
@@ -1712,14 +1765,24 @@ function homePage() {
                 [h('p', { class: 'muted small', style: { gridColumn: '1 / -1' }, text: t('Записів поки немає. Увімкніть охорону, і камера запише відео, коли побачить рух.') })]));
         } catch (e) { /* shown by status */ }
     }
-    recEvents.addEventListener('changed', () => { recentKey = ''; });
+    recEvents.addEventListener('changed', () => { recentKey = null; });
 
     const el = h('div', null,
         h('div', { class: 'page-head' }, h('h1', { text: t('Головна') })),
         banners,
         h('div', { class: 'home-grid' },
             h('div', null, liveCard),
-            h('div', { class: 'home-side' }, secCard, statsCard, facesCard, recentCard)));
+            h('div', { class: 'home-side' }, secCard, loginsCard, statsCard, facesCard, recentCard)));
+
+    // Seconds since the last motion. The camera forgets it on restart: then
+    // the end of the newest motion clip counts.
+    function motionAgo(st) {
+        if (st.motion.ago >= 0 || !st.clock) return st.motion.ago;
+        const m = recentList.find(x => x.k === 'm');
+        if (!m) return -1;
+        const end = new Date(+m.d.slice(0, 4), +m.d.slice(4, 6) - 1, +m.d.slice(6, 8), +m.t.slice(0, 2), +m.t.slice(2, 4), +m.t.slice(4, 6) + m.dur);
+        return Math.max(0, Math.floor((st.time * 1000 - end.getTime()) / 1000));
+    }
 
     let lastRecOn = false;
     function update(st) {
@@ -1764,13 +1827,16 @@ function homePage() {
             sdVal.textContent = t('Не вставлено');
             sdBar.classList.add('hidden');
         }
-        motionVal.textContent = st.security ? (st.motion.active ? t('Зараз') : fmtAgo(st.motion.ago)) : t('Охорону вимкнено');
+        motionVal.textContent = st.security ? (st.motion.active ? t('Зараз') : fmtAgo(motionAgo(st))) : t('Охорону вимкнено');
         wifiVal.textContent = st.wifi.connected ? t('{x} · {s} сигнал', { x: st.wifi.ssid, s: signalText(st.wifi.rssi) }) : t('Не підключено');
         remoteRow.classList.toggle('hidden', !st.remote.enabled);
         remoteVal.textContent = remoteStateText(st.remote.state);
 
-        if (st.rec.on !== lastRecOn) { lastRecOn = st.rec.on; if (!st.rec.on) recentKey = ''; }
-        loadRecent(!recentKey);
+        if (st.rec.on !== lastRecOn) { lastRecOn = st.rec.on; if (!st.rec.on) recentKey = null; }
+        loadRecent(recentKey === null);
+
+        // A new login attempt; else every 5 minutes, so old ones drop off
+        if (st.logins !== undefined && (st.logins !== loginKey || Date.now() - loginAt > 300000)) loadLogins(st.logins);
 
         if (info.faces && st.faces) {
             // A new sighting, switched on or off; else once a minute for "… ago"
@@ -2302,6 +2368,33 @@ function settingsPage() {
                 }
             }, t('Вийти на всіх пристроях'))));
 
+    // Logged-in devices and the login history
+    const devList = h('div', { class: 'login-list' });
+    const histList = h('div', { class: 'login-list' });
+    const devicesCard = card('chip', t('Пристрої, де виконано вхід'), devList,
+        h('p', { class: 'tip', style: { marginTop: '14px' } }, icon('lock', 'sm'), t('Не впізнаєте пристрій? Натисніть «Вийти» біля нього і змініть пароль.')));
+    const historyCard = card('clock', t('Історія входів'), histList);
+    let loginsSeq = null;
+    async function loadLogins() {
+        loginsSeq = status ? status.logins : null;
+        try {
+            const r = await api('api/logins');
+            devList.replaceChildren(...r.sessions.map(e => loginRow(e, {
+                current: e.current,
+                action: e.current ? null : h('button', {
+                    class: 'btn ghost', onclick: async () => {
+                        if (!await confirmDialog({ title: t('Вийти на цьому пристрої?'), text: t('На пристрої {d} доведеться увійти знову.', { d: e.dev || t('Невідомий пристрій') }), ok: t('Вийти') })) return;
+                        try { await api('api/logins/end', { id: e.id }); toast(t('Пристрій вийшов з камери')); } catch (ex) { showError(ex); }
+                        loadLogins();
+                    }
+                }, icon('logout', 'sm'), t('Вийти')),
+            })));
+            histList.replaceChildren(...(r.history.length ? r.history.map(e => loginRow(e)) :
+                [h('p', { class: 'muted small', text: t('Входів ще не було.') })]));
+        } catch (e) { showError(e); }
+    }
+    const accountSection = h('div', { class: 'stack' }, accountCard, devicesCard, historyCard);
+
     // --- device
     const nameInput = h('input', { type: 'text', maxLength: 40, 'aria-label': t('Назва камери') });
     let nameTimer;
@@ -2414,7 +2507,7 @@ function settingsPage() {
         ['image', 'image', t('Зображення'), imgCard],
         ['wifi', 'wifi', 'Wi-Fi', wifiCard],
         ['remote', 'globe', t('Віддалений доступ'), remoteCard],
-        ['account', 'user', t('Обліковий запис'), accountCard],
+        ['account', 'user', t('Обліковий запис'), accountSection],
         ['device', 'chip', t('Пристрій'), deviceCard],
     ].filter(Boolean);
     let shown = localStorageGet('settingsSection');
@@ -2432,6 +2525,7 @@ function settingsPage() {
         panel.replaceChildren(sections.find(s => s[0] === id)[3]);
         replay(panel, 'panel-in');
         if (id === 'faces' && S) loadPeople();
+        if (id === 'account' && S) loadLogins();
         // The live preview only runs while the picture settings are open
         if (preview) {
             if (id === 'image' && !el.classList.contains('hidden')) preview.start(); else preview.stop();
@@ -2460,14 +2554,20 @@ function settingsPage() {
         clockInfo.className = 'muted small';
         sysInfo.textContent = t('Працює {u} · Вільна пам\'ять {h} КБ / {p} КБ · {w}×{hh}, {f} кадр/с', { u: fmtDur(st.uptime), h: Math.round(st.heap / 1024), p: Math.round(st.psram / 1024), w: st.width, hh: st.height, f: st.fps.toFixed(1) });
         if (preview) preview.setRotate(S.camera.rotate || 0);
+        if (shown === 'account' && st.logins !== loginsSeq && !el.classList.contains('hidden')) loadLogins();
     }
 
     async function enter() {
+        // The home page's "Усі" opens a section
+        const want = localStorageGet('settingsSection');
+        if (want !== shown && sections.some(x => x[0] === want)) show(want);
         try {
             S = await api('api/settings');
             refresh();
+            loginsSeq = null;
             if (status) updateStatus(status);
             if (shown === 'faces') loadPeople();
+            if (shown === 'account' && !status) loadLogins();
         } catch (e) { showError(e); }
         if (!preview) {
             preview = liveView({ fps: 5 });

@@ -37,6 +37,7 @@ const PLURALS = {
     hour: [['годину', 'години', 'годин'], ['hour', 'hours']],
     day: [['день', 'дні', 'днів'], ['day', 'days']],
     net: [['мережу', 'мережі', 'мереж'], ['network', 'networks']],
+    try: [['спроба', 'спроби', 'спроб'], ['attempt', 'attempts']],
 };
 function pl(n, key) {
     const [uk, en] = PLURALS[key];
@@ -545,4 +546,21 @@ const EN = {
     "вхід: admin / demo1234": "login: admin / demo1234",
     "Майстер": "Setup",
     "Це демо. На справжній камері тут завантажиться відео {x}, яке відкривається у VLC або іншому плеєрі.": "This is a demo. A real camera downloads the video {x} here, which plays in VLC or another player.",
+    // logins
+    "Домашня мережа": "Home network",
+    "Через інтернет": "Over the internet",
+    "Невірний пароль ({n} {u})": "Wrong password ({n} {u})",
+    "Невірний пароль": "Wrong password",
+    "Невідомий пристрій": "Unknown device",
+    "зараз": "now",
+    "востаннє {x}": "last active {x}",
+    "Цей пристрій": "This device",
+    "Нещодавні входи": "Recent logins",
+    "Пристрої, де виконано вхід": "Logged-in devices",
+    "Не впізнаєте пристрій? Натисніть «Вийти» біля нього і змініть пароль.": "Don't recognise a device? Tap \"Log out\" next to it and change your password.",
+    "Історія входів": "Login history",
+    "Вийти на цьому пристрої?": "Log out on this device?",
+    "На пристрої {d} доведеться увійти знову.": "{d} will have to log in again.",
+    "Пристрій вийшов з камери": "The device was logged out",
+    "Входів ще не було.": "No logins yet.",
 };

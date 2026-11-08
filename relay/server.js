@@ -73,6 +73,19 @@ function tokenOk(t) {
 // The origin only accepts Cloudflare's addresses, so its header is trustworthy
 const clientIp = req => req.headers['cf-connecting-ip'] || req.headers['x-real-ip'] || req.socket.remoteAddress;
 
+// "City, Region, CC" (URL-encoded) from Cloudflare's visitor location headers (the country
+// always; city and region with the "Add visitor location headers" transform)
+function clientPlace(req) {
+    const h = k => String(req.headers[k] || '').trim();
+    const cc = /^[A-Z]{2}$/.test(h('cf-ipcountry')) && !['XX', 'T1'].includes(h('cf-ipcountry')) ? h('cf-ipcountry') : '';
+    const parts = [h('cf-ipcity'), h('cf-region'), cc].filter(Boolean);
+    // Cloudflare sends UTF-8 names as Latin-1 bytes
+    let text = Buffer.from(parts.filter((p, i) => p !== parts[i - 1]).join(', '), 'latin1').toString('utf8');
+    // URL-encoded, to fit the camera's 47 bytes
+    while (encodeURIComponent(text).length > 47) text = text.slice(0, -1);
+    return encodeURIComponent(text);
+}
+
 // Fixed-window counter per key
 class Limiter {
     constructor(max, windowMs) {
@@ -435,6 +448,10 @@ function handle(req, res) {
         if (sid) headers.cookie = sid;
         headers.host = 'camera';
         headers.connection = 'close';
+        // Who is visiting, for the camera's login history
+        headers['x-client-ip'] = String(clientIp(req) || '').slice(0, 39);
+        const place = clientPlace(req);
+        if (place) headers['x-client-place'] = place;
 
         const preq = http.request({ method: req.method, path: sub + query, headers, createConnection: () => tunnel });
         const firstByte = setTimeout(() => preq.destroy(new Error('timeout')), 30000);

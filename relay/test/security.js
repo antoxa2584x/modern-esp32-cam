@@ -131,11 +131,15 @@ function serveTunnel(ws) {
             headers: {
                 Cookie: '_ga=GA1.1; site_admin=secret; sid=abc123; other=1',
                 'X-Forwarded-For': '1.2.3.4', 'CF-Connecting-IP': '1.2.3.4', Authorization: 'Basic eA==', 'X-Custom': 'y',
+                'X-Client-Ip': '6.6.6.6', 'X-Client-Place': 'Fake', 'CF-IPCountry': 'UA', 'CF-IPCity': 'Kyiv',
             },
         });
         check('site cookies are not forwarded to the camera', lastRequestHeaders.cookie === 'sid=abc123', lastRequestHeaders.cookie);
         check('proxy/auth/custom headers are not forwarded',
             !lastRequestHeaders['x-forwarded-for'] && !lastRequestHeaders['cf-connecting-ip'] && !lastRequestHeaders.authorization && !lastRequestHeaders['x-custom']);
+        check('visitor address and place come from the relay, not the browser',
+            lastRequestHeaders['x-client-ip'] === '1.2.3.4' && lastRequestHeaders['x-client-place'] === encodeURIComponent('Kyiv, UA'),
+            `${lastRequestHeaders['x-client-ip']} ${lastRequestHeaders['x-client-place']}`);
 
         // 6. Offline and unknown cameras look the same (no id probing)
         const unknown = await request('GET', '/cam/zzzzzzzzzz/');

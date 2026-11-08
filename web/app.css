@@ -612,6 +612,16 @@ main.content {
 .bar > div { height: 100%; background: var(--accent); border-radius: 3px; }
 .bar.warn > div { background: var(--warn); }
 
+.login-list { display: flex; flex-direction: column; gap: 14px; }
+.login { display: flex; align-items: center; gap: 12px; }
+.login .ico { color: var(--accent); flex: none; }
+.login.bad .ico { color: var(--danger); }
+.login .grow { min-width: 0; }
+.login .value { font-weight: 600; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.login .faint { overflow-wrap: anywhere; }
+.login .pill { font-size: 0.75rem; padding: 2px 8px; }
+.login .btn { flex: none; }
+
 /* ---------- recordings ---------- */
 .chips { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: none; }
 .chips::-webkit-scrollbar { display: none; }

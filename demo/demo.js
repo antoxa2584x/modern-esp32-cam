@@ -211,7 +211,7 @@ ${stamp}
             sd: { ok: true, total: 31914983424, used },
             wifi: { connected: true, ssid: 'Дім_2.4', rssi: -58, ip: '192.168.1.57', host: 'camera-a1b2.local', ap: false, apSsid: 'ESP32-Camera-A1B2', mac: '24:0A:C4:00:A1:B2' },
             remote: { enabled: s.remote.enabled, state: s.remote.enabled ? 'online' : 'off', url: `https://${s.remote.host}/cam/${s.remote.id}/` },
-            clock: true, time: Math.floor(Date.now() / 1000), uptime: Math.floor((Date.now() - bootAt) / 1000) + 7342, heap: 141000, psram: 3400000,
+            logins: 1, clock: true, time: Math.floor(Date.now() / 1000), uptime: Math.floor((Date.now() - bootAt) / 1000) + 7342, heap: 141000, psram: 3400000,
         };
     }
 
@@ -249,6 +249,26 @@ ${stamp}
         }
         if (path === 'logout' || path === 'logout-all') { sessionSet('camDemo.auth', null); return ok(); }
         if (path === 'time') return ok();
+        if (path === 'logins') {
+            if (!authed()) return [401, { error: 'auth' }];
+            const now = Math.floor(Date.now() / 1000);
+            const ua = navigator.userAgent;
+            const dev = [/Edg/.test(ua) ? 'Edge' : /Firefox/.test(ua) ? 'Firefox' : /Chrome/.test(ua) ? 'Chrome' : /Safari/.test(ua) ? 'Safari' : '',
+                /iPhone/.test(ua) ? 'iPhone' : /Android/.test(ua) ? 'Android' : /Windows/.test(ua) ? 'Windows' : /Mac OS/.test(ua) ? 'Mac' : ''].filter(Boolean).join(' · ');
+            const place = encodeURIComponent('Lviv, Lviv Oblast, UA');
+            return ok({
+                sessions: [
+                    { id: 1, at: now - 600, seen: now, ip: '192.168.1.23', dev, remote: false, current: true },
+                    { id: 2, at: now - 5 * 3600, seen: now - 1800, ip: '93.170.44.12', place, dev: 'Chrome · Android', remote: true },
+                ],
+                history: [
+                    { at: now - 600, ip: '192.168.1.23', dev, remote: false, ok: true, id: 1 },
+                    { at: now - 2 * 3600, ip: '185.12.33.7', place: encodeURIComponent('Amsterdam, North Holland, NL'), dev: 'Firefox · Linux', remote: true, ok: false, n: 4 },
+                    { at: now - 5 * 3600, ip: '93.170.44.12', place, dev: 'Chrome · Android', remote: true, ok: true, id: 2 },
+                ],
+            });
+        }
+        if (path === 'logins/end') return ok();
         if (path === 'wifi/scan') {
             if (!authed() && !setupOpen()) return [401, { error: 'auth' }];
             if (q.has('start')) return ok({ busy: true, networks: [] });

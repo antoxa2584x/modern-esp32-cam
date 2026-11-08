@@ -76,6 +76,33 @@ function merge(dst, src) {
     }
 }
 
+// Login history and logged-in devices, like src/auth.cpp
+const nowS = () => Math.floor(Date.now() / 1000);
+const loginHistory = [
+    { at: nowS() - 2 * 3600, ip: '185.12.33.7', place: encodeURIComponent('Amsterdam, North Holland, NL'), dev: 'Firefox · Linux', remote: true, ok: false, n: 4 },
+    { at: nowS() - 5 * 3600, ip: '93.170.44.12', place: encodeURIComponent('Lviv, Lviv Oblast, UA'), dev: 'Chrome · Android', remote: true, ok: true, id: 7 },
+    { at: nowS() - 3 * 86400, ip: '192.168.1.23', dev: 'Safari · iPhone', remote: false, ok: true, id: 3 },
+];
+const sessionInfo = new Map([['phone'.padEnd(40, 'p'), { id: 7, at: nowS() - 5 * 3600, seen: nowS() - 1800, ip: '93.170.44.12', place: loginHistory[1].place, dev: 'Chrome · Android', remote: true }],
+    ['ipad'.padEnd(40, 'i'), { id: 3, at: nowS() - 3 * 86400, seen: nowS() - 86400, ip: '192.168.1.23', dev: 'Safari · iPhone', remote: false }]]);
+for (const t of sessionInfo.keys()) sessions.add(t);
+let loginSeq = 1;
+function deviceOf(ua = '') {
+    const os = /iPhone/.test(ua) ? 'iPhone' : /Android/.test(ua) ? 'Android' : /Windows/.test(ua) ? 'Windows' : /Mac OS/.test(ua) ? 'Mac' : /Linux/.test(ua) ? 'Linux' : '';
+    const br = /Edg/.test(ua) ? 'Edge' : /Firefox/.test(ua) ? 'Firefox' : /Chrome/.test(ua) ? 'Chrome' : /Safari/.test(ua) ? 'Safari' : '';
+    return [br, os].filter(Boolean).join(' · ');
+}
+function recordLogin(req, ok, token) {
+    const e = { at: nowS(), ip: req.socket.remoteAddress.replace(/^::ffff:/, ''), dev: deviceOf(req.headers['user-agent']), remote: false, ok };
+    if (ok) {
+        e.id = Math.floor(Math.random() * 1e9) + 1;
+        sessionInfo.set(token, { id: e.id, at: e.at, seen: e.at, ip: e.ip, dev: e.dev, remote: false });
+    }
+    loginHistory.unshift(e);
+    loginHistory.splice(16);
+    loginSeq++;
+}
+
 function status() {
     const recOn = manual || (settings.security && Math.floor(Date.now() / 20000) % 3 === 0);
     if (recOn && !recStart) recStart = Date.now();
@@ -83,7 +110,9 @@ function status() {
     return {
         name: settings.name, fw: '1.0.0-mock', security: settings.security, camera: true, width: 800, height: 600, fps: 12.4, viewers: 1, lamp,
         rotate: settings.camera.rotate,
-        motion: { active: settings.security && recOn, level: 40, ago: 95 },
+        // -1: no motion since the (pretend) restart; the page falls back on the newest clip
+        motion: { active: settings.security && recOn, level: 40, ago: -1 },
+        logins: loginSeq,
         rec: { on: recOn, manual, sec: recStart ? Math.floor((Date.now() - recStart) / 1000) : 0, error: '' },
         sd: { ok: true, total: 31914983424, used: 12884901888 },
         wifi: { connected: true, ssid: 'Дім_2.4', rssi: -58, ip: '192.168.1.57', host: 'camera-a1b2.local', ap: false, apSsid: 'ESP32-Camera-A1B2', mac: '24:0A:C4:00:A1:B2' },
@@ -106,12 +135,13 @@ async function api(req, res, url) {
     if (p === '/api/state') return json(res, 200, { configured, wifi: configured, setup: setupOpen, recovery: false, authed: authed(req), name: settings.name, ap: !configured, apSsid: 'ESP32-Camera-A1B2', streamPort: PORT + 1, fw: '1.0.0-mock', user, faces: FACES });
     if (p === '/api/login' && post) {
         const b = await body(req);
-        if (b.user !== user || b.password !== password) return json(res, 403, { error: 'wrong', wait: 0 });
+        if (b.user !== user || b.password !== password) { recordLogin(req, false); return json(res, 403, { error: 'wrong', wait: 0 }); }
         const t = Math.random().toString(36).slice(2).padEnd(40, 'x').slice(0, 40);
         sessions.add(t);
+        recordLogin(req, true, t);
         return json(res, 200, { ok: true }, { 'Set-Cookie': `sid=${t}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000` });
     }
-    if (p === '/api/logout' && post) { sessions.delete(cookieSid(req)); return json(res, 200, { ok: true }, { 'Set-Cookie': 'sid=; Path=/; Max-Age=0' }); }
+    if (p === '/api/logout' && post) { sessions.delete(cookieSid(req)); sessionInfo.delete(cookieSid(req)); return json(res, 200, { ok: true }, { 'Set-Cookie': 'sid=; Path=/; Max-Age=0' }); }
     if (p === '/api/time' && post) { if (need('setup')) json(res, 200, { ok: true }); return; }
     if (p === '/api/wifi/scan') {
         if (!need('setup')) return;
@@ -130,6 +160,17 @@ async function api(req, res, url) {
     if (p === '/api/setup/status') return json(res, 200, { state: Date.now() - setupAt > 4000 ? 'ok' : 'connecting', ip: '192.168.1.57', host: 'camera-a1b2.local', ssid: 'Дім_2.4' });
     if (!need('user')) return;
     if (p === '/api/status') return json(res, 200, status());
+    if (p === '/api/logins/end' && post) {
+        const b = await body(req);
+        for (const [t, s] of sessionInfo) if (s.id === b.id) { sessionInfo.delete(t); sessions.delete(t); return json(res, 200, { ok: true }); }
+        return json(res, 404, { error: 'missing' });
+    }
+    if (p === '/api/logins') {
+        const mine = cookieSid(req);
+        if (sessionInfo.has(mine)) sessionInfo.get(mine).seen = nowS();
+        const list = [...sessionInfo].sort((a, b) => b[1].at - a[1].at).map(([t, s]) => ({ ...s, current: t === mine || undefined }));
+        return json(res, 200, { sessions: list, history: loginHistory });
+    }
     if (p === '/api/settings') {
         if (post) {
             const b = await body(req);

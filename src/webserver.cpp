@@ -41,11 +41,34 @@ static String cookie(AsyncWebServerRequest* r, const char* name) {
     return line.substring(k + key.length(), stop < 0 ? line.length() : stop);
 }
 
-static bool authed(AsyncWebServerRequest* r) { return auth::valid(cookie(r, "sid")); }
-
 // The relay tunnel connects from 127.0.0.1: those requests come from the internet
 static bool viaRelay(AsyncWebServerRequest* r) {
     return r->client() && r->client()->remoteIP() == IPAddress(127, 0, 0, 1);
+}
+
+static String header(AsyncWebServerRequest* r, const char* name) {
+    const AsyncWebHeader* h = r->getHeader(name);
+    return h ? h->value() : String();
+}
+
+// The relay adds the visitor's address and location; at home anyone could
+// send those headers, so they only count through the relay
+static auth::Client clientOf(AsyncWebServerRequest* r) {
+    auth::Client c;
+    c.remote = viaRelay(r);
+    if (c.remote) {
+        c.ip = header(r, "X-Client-Ip");
+        c.place = header(r, "X-Client-Place");
+    } else if (r->client()) {
+        c.ip = r->client()->remoteIP().toString();
+    }
+    c.ua = header(r, "User-Agent");
+    return c;
+}
+
+static bool authed(AsyncWebServerRequest* r) {
+    auth::Client c = clientOf(r);
+    return auth::valid(cookie(r, "sid"), &c);
 }
 
 // The setup wizard may run without a login until a user exists, and in
@@ -197,7 +220,7 @@ static void fillStatus(JsonObject o) {
     m["active"] = motion::active();
     m["level"] = motion::level();
     uint32_t lm = motion::lastMotionMs();
-    m["ago"] = lm ? (millis() - lm) / 1000 : -1;
+    m["ago"] = lm ? (int32_t)((millis() - lm) / 1000) : -1;
     JsonObject rc = o["rec"].to<JsonObject>();
     rc["on"] = rec::recording();
     rc["manual"] = rec::manual();
@@ -217,6 +240,7 @@ static void fillStatus(JsonObject o) {
         fc["on"] = faces::running();
         fc["seq"] = faces::eventSeq();
     }
+    o["logins"] = auth::historySeq();
     o["clock"] = rec::clockKnown();
     o["time"] = (uint32_t)time(nullptr);
     o["uptime"] = millis() / 1000;
@@ -250,7 +274,7 @@ static void routesAuth() {
 
     postJson("/api/login", PUBLIC, [](AsyncWebServerRequest* r, JsonObjectConst b) {
         bool locked = false, remote = viaRelay(r);
-        String tok = auth::login(b["user"] | "", b["password"] | "", remote, locked);
+        String tok = auth::login(b["user"] | "", b["password"] | "", clientOf(r), locked);
         if (!tok.length()) {
             JsonDocument d;
             d["error"] = locked ? "locked" : "wrong";
@@ -280,6 +304,18 @@ static void routesAuth() {
         r->send(res);
     });
 
+    // Devices logged in and the last login attempts
+    postJson("/api/logins/end", USER, [](AsyncWebServerRequest* r, JsonObjectConst b) {
+        if (!auth::endSession(b["id"] | 0u)) return sendError(r, 404, "missing");
+        sendOk(r);
+    });
+
+    get("/api/logins", USER, [](AsyncWebServerRequest* r) {
+        JsonDocument d;
+        auth::toJson(d.to<JsonObject>(), cookie(r, "sid"));
+        sendJson(r, d);
+    });
+
     // First setup / recovery: Wi-Fi and the login in one go
     postJson("/api/setup", SETUP, [](AsyncWebServerRequest* r, JsonObjectConst b) {
         String user = b["user"] | "";
@@ -299,8 +335,7 @@ static void routesAuth() {
         if (needUser) {
             auth::setCredentials(user, pass);
             auth::logoutAll();
-            bool locked;
-            tok = auth::login(user, pass, false, locked);
+            tok = auth::newSession(clientOf(r));
         }
         if (ssid.length()) net::connect(ssid, wpass, true);
         if (net::recoveryMode()) net::endRecovery();
@@ -349,8 +384,7 @@ static void routesAuth() {
         auth::setCredentials(user, pass);
         // Other devices must log in again; this one stays in
         auth::logoutAll();
-        bool locked;
-        String tok = auth::login(user, pass, viaRelay(r), locked);
+        String tok = auth::newSession(clientOf(r));
         AsyncWebServerResponse* res = r->beginResponse(200, "application/json", "{\"ok\":true}");
         setSessionCookie(res, tok);
         r->send(res);
