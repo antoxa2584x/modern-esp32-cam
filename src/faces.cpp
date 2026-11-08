@@ -15,6 +15,7 @@
 #include "human_face_detect_mnp01.hpp"
 #include "human_face_detect_msr01.hpp"
 #include "motion.h"
+#include "storage.h"
 
 namespace faces {
 static const int MAX_SIDE = 512;     // frames are decoded at most this big for the models
@@ -25,9 +26,12 @@ static const uint32_t ENROLL_TIMEOUT_MS = 25000;
 static const int EMB = 512;          // embedding length of the 112 v1 model
 static const int THUMB = 96;         // remembered face photo, square
 static const int THUMB_MAX = 4096;   // its JPEG size limit
-static const int MAX_EVENTS = 20;
+static const int MAX_EVENTS = 100;  // sightings kept (on the SD card: across restarts)
 static const uint32_t KNOWN_REPEAT_MS = 60000;    // same person logged again after
 static const uint32_t UNKNOWN_REPEAT_MS = 30000;  // a stranger logged again after
+// A second sighting this soon confirms a stranger. Generous: while a clip is
+// recorded this task gets little CPU and checks frames seconds apart.
+static const uint32_t STRANGER_CONFIRM_MS = 10000;
 static const uint32_t MAGIC = 0x45434146;         // "FACE"
 
 // One remembered photo; the "faces" partition holds a Header and these
@@ -48,12 +52,16 @@ struct Header {
 
 struct Event {
     uint32_t seq;
-    time_t when;  // 0 without a clock
-    uint32_t ms;
+    time_t when;    // 0 without a clock
+    uint32_t ms;    // 0 = from before this boot
     char name[48];  // "" for a stranger
-    uint8_t* jpg;
+    uint8_t* jpg;   // the frame, when it isn't on the card
     size_t len;
+    bool onCard;    // the frame is FACE_DIR/<seq>.jpg
 };
+// On the SD card: a photo per sighting plus one "seq\twhen\tname" line each
+static const char* FACE_DIR = "/faces";
+static const char* FACE_LOG = "/faces/log.txt";
 
 struct Seen {
     int x, y, w, h;  // 0..1000 of the picture
@@ -77,8 +85,11 @@ static String enrollName;
 static uint32_t enrollAt = 0;
 static volatile bool enrolling = false;
 
-static Event events[MAX_EVENTS];
+// Oldest to newest, a ring in PSRAM
+static Event* events = nullptr;
+static int evHead = 0, evCount = 0;
 static volatile uint32_t nextSeq = 0;
+static volatile uint32_t checks = 0, checksWithFaces = 0;  // frames analysed since boot
 
 static std::vector<Seen> liveFaces;
 static uint32_t liveAt = 0;
@@ -211,22 +222,113 @@ static void restore(FaceRecognition112V1S8& rec) {
 
 // ---------- sightings ----------
 
-static void logEvent(const String& name, const uint8_t* jpg, size_t len) {
-    uint8_t* copy = (uint8_t*)ps_malloc(len);
-    if (!copy) return;
-    memcpy(copy, jpg, len);
+static String eventPath(uint32_t seq) { return String(FACE_DIR) + "/" + seq + ".jpg"; }
+
+static bool saveToCard(const Event& e, const uint8_t* jpg, size_t len) {
+    if (!store::mounted()) return false;
+    fs::FS& f = store::fs();
+    if (!f.exists(FACE_DIR)) f.mkdir(FACE_DIR);
+    String path = eventPath(e.seq);
+    File j = f.open(path, FILE_WRITE);
+    if (!j) return false;
+    bool ok = j.write(jpg, len) == len;
+    j.close();
+    File l = ok ? f.open(FACE_LOG, FILE_APPEND) : File();
+    if (l) {
+        l.printf("%u\t%u\t%s\n", (unsigned)e.seq, (unsigned)e.when, e.name);
+        l.close();
+        return true;
+    }
+    f.remove(path);
+    return false;
+}
+
+// Adds a sighting, dropping the oldest when full
+static void addEvent(const Event& e) {
+    String drop;
     lock();
-    Event& e = events[nextSeq % MAX_EVENTS];
-    free(e.jpg);
+    Event& slot = events[evHead];
+    if (evCount == MAX_EVENTS) {
+        free(slot.jpg);
+        if (slot.onCard) drop = eventPath(slot.seq);
+    } else {
+        evCount++;
+    }
+    slot = e;
+    evHead = (evHead + 1) % MAX_EVENTS;
+    unlock();
+    if (drop.length() && store::mounted()) store::fs().remove(drop);
+}
+
+static void logEvent(const String& name, const uint8_t* jpg, size_t len) {
+    Event e = {};
+    lock();
     e.seq = nextSeq++;
+    unlock();
     time_t now = time(nullptr);
     e.when = now > 1700000000 ? now : 0;
-    e.ms = millis();
+    e.ms = millis() | 1;
     strlcpy(e.name, name.c_str(), sizeof(e.name));
-    e.jpg = copy;
-    e.len = len;
-    unlock();
+    e.onCard = saveToCard(e, jpg, len);
+    if (!e.onCard) {  // no card: kept in memory until the restart
+        e.jpg = (uint8_t*)ps_malloc(len);
+        if (!e.jpg) return;
+        memcpy(e.jpg, jpg, len);
+        e.len = len;
+    }
+    addEvent(e);
     log_i("faces: saw %s", name.length() ? name.c_str() : "a stranger");
+}
+
+// Sightings saved before this boot: the newest MAX_EVENTS come back, the log
+// is rewritten with just them and older photos are deleted
+static void loadFromCard() {
+    if (!store::mounted()) return;
+    fs::FS& f = store::fs();
+    File l = f.open(FACE_LOG, FILE_READ);
+    if (!l) return;
+    std::vector<Event> kept;
+    while (l.available()) {
+        String line = l.readStringUntil('\n');
+        int a = line.indexOf('\t'), b = line.indexOf('\t', a + 1);
+        if (a <= 0 || b < 0) continue;
+        Event e = {};
+        e.seq = strtoul(line.c_str(), nullptr, 10);
+        e.when = strtoul(line.c_str() + a + 1, nullptr, 10);
+        strlcpy(e.name, line.c_str() + b + 1, sizeof(e.name));
+        e.onCard = true;
+        if (kept.size() == MAX_EVENTS) kept.erase(kept.begin());
+        kept.push_back(e);
+    }
+    l.close();
+
+    std::vector<String> stray;
+    File d = f.open(FACE_DIR);
+    for (File x = d.openNextFile(); x; x = d.openNextFile()) {
+        String n = x.name();
+        x.close();
+        if (!n.endsWith(".jpg")) continue;
+        uint32_t seq = strtoul(n.c_str(), nullptr, 10);
+        bool keep = false;
+        for (auto& e : kept) keep = keep || e.seq == seq;
+        if (!keep) stray.push_back(eventPath(seq));
+    }
+    d.close();
+    for (auto& p : stray) f.remove(p);
+
+    File w = f.open(FACE_LOG, FILE_WRITE);
+    uint32_t last = 0;
+    for (auto& e : kept) {
+        if (!f.exists(eventPath(e.seq))) continue;
+        if (w) w.printf("%u\t%u\t%s\n", (unsigned)e.seq, (unsigned)e.when, e.name);
+        addEvent(e);
+        last = e.seq;
+    }
+    if (w) w.close();
+    lock();
+    if (evCount && last >= nextSeq) nextSeq = last + 1;  // photo URLs are never reused
+    unlock();
+    log_i("faces: %d sightings from the card", evCount);
 }
 
 // When each person (or any stranger, under "") was last logged
@@ -315,12 +417,13 @@ static void task(void*) {
     auto* s2 = new HumanFaceDetectMNP01(0.5F, 0.3F, 5);
     auto* rec = new FaceRecognition112V1S8();
     restore(*rec);
+    loadFromCard();
 
     Img m = {};
     uint8_t* jpg = nullptr;
     size_t cap = 0;
     uint32_t seq = 0;
-    int strangerStreak = 0;
+    uint32_t strangerAt = 0;  // last frame with a stranger, 0 = none lately
 
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(INTERVAL_MS));
@@ -346,13 +449,14 @@ static void task(void*) {
                 unlock();
             }
             isRunning = false;
-            strangerStreak = 0;
+            strangerAt = 0;
             continue;
         }
         isRunning = true;
         if (enrolling) cam::touch();
         size_t len = cam::copyLatest(jpg, cap, seq);
         if (!len || !decode(m, jpg, len)) continue;
+        checks = checks + 1;
 
         std::vector<int> shape = {m.h, m.w, 3};
         auto& candidates = s1->infer(m.px, shape);
@@ -362,6 +466,7 @@ static void task(void*) {
         found.sort([](const dl::detect::result_t& a, const dl::detect::result_t& b) {
             return (a.box[2] - a.box[0]) > (b.box[2] - b.box[0]);
         });
+        if (!found.empty()) checksWithFaces = checksWithFaces + 1;
         std::vector<Seen> seen;
         for (auto& f : found) {
             Seen s;
@@ -406,7 +511,8 @@ static void task(void*) {
         liveAt = millis();
         unlock();
 
-        // The log: each person once a minute; strangers once they stay two frames
+        // The log: each person once a minute; strangers once seen in two frames
+        // close together (detection flickers, so not necessarily in a row)
         bool stranger = false;
         for (size_t k = 0; k < seen.size() && k < MAX_FACES; k++) {  // the rest weren't checked
             const Seen& s = seen[k];
@@ -420,8 +526,9 @@ static void task(void*) {
                 logEvent(s.name, jpg, len);
             }
         }
-        strangerStreak = stranger ? strangerStreak + 1 : 0;
-        if (strangerStreak >= 2) {
+        bool confirmed = stranger && strangerAt && millis() - strangerAt < STRANGER_CONFIRM_MS;
+        if (stranger) strangerAt = millis() | 1;
+        if (confirmed) {
             uint32_t last = lastLogged("", false);
             if (!last || millis() - last > UNKNOWN_REPEAT_MS) {
                 lastLogged("", true);
@@ -438,7 +545,8 @@ void begin() {
     part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "faces");
     if (!part) log_w("faces: no \"faces\" partition, flash over USB to add it");
     slots = (Record*)ps_calloc(MAX_PEOPLE, sizeof(Record));
-    if (!slots || !psramFound()) {
+    events = (Event*)ps_calloc(MAX_EVENTS, sizeof(Event));
+    if (!slots || !events || !psramFound()) {
         log_e("faces: needs PSRAM");
         part = nullptr;
         return;
@@ -501,16 +609,18 @@ void info(JsonObject o) {
     en["name"] = enrollName;
     JsonArray ev = o["events"].to<JsonArray>();
     uint32_t now = millis();
-    for (int k = 1; k <= MAX_EVENTS; k++) {
-        const Event& e = events[(nextSeq - k) % MAX_EVENTS];
-        if (!e.jpg || e.seq != nextSeq - k) continue;
+    for (int k = 1; k <= evCount; k++) {  // newest first
+        const Event& e = events[(evHead - k + MAX_EVENTS) % MAX_EVENTS];
         JsonObject j = ev.add<JsonObject>();
         j["n"] = e.seq;
         j["name"] = e.name;
-        j["ago"] = (now - e.ms) / 1000;
+        if (e.ms) j["ago"] = (now - e.ms) / 1000;
         j["time"] = (uint32_t)e.when;
     }
     o["seq"] = nextSeq;
+    o["card"] = store::mounted();
+    o["checks"] = checks;
+    o["withFaces"] = checksWithFaces;
     unlock();
 }
 
@@ -543,10 +653,21 @@ std::shared_ptr<std::vector<uint8_t>> photo(uint32_t uid) {
 
 std::shared_ptr<std::vector<uint8_t>> eventFrame(uint32_t seq) {
     std::shared_ptr<std::vector<uint8_t>> out;
+    bool onCard = false;
     lock();
-    const Event& e = events[seq % MAX_EVENTS];
-    if (e.jpg && e.seq == seq) out = std::make_shared<std::vector<uint8_t>>(e.jpg, e.jpg + e.len);
+    for (int k = 0; k < evCount && !out && !onCard; k++) {
+        const Event& e = events[k];
+        if (e.seq != seq) continue;
+        if (e.jpg) out = std::make_shared<std::vector<uint8_t>>(e.jpg, e.jpg + e.len);
+        onCard = e.onCard;
+    }
     unlock();
+    if (!onCard || !store::mounted()) return out;
+    File f = store::fs().open(eventPath(seq), FILE_READ);
+    if (!f || !f.size()) return out;
+    out = std::make_shared<std::vector<uint8_t>>(f.size());
+    if (f.read(out->data(), out->size()) != out->size()) out.reset();
+    f.close();
     return out;
 }
 }  // namespace faces

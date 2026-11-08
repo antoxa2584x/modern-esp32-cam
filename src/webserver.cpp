@@ -550,12 +550,6 @@ static void routesRecordings() {
 }
 
 static void routesFaces() {
-    get("/api/faces", USER, [](AsyncWebServerRequest* r) {
-        JsonDocument d;
-        faces::info(d.to<JsonObject>());
-        sendJson(r, d);
-    });
-
     // Polled by the live view to draw names over the picture
     get("/api/faces/live", USER, [](AsyncWebServerRequest* r) {
         JsonDocument d;
@@ -597,6 +591,14 @@ static void routesFaces() {
 
     get("/api/faces/event", USER, [](AsyncWebServerRequest* r) {
         sendJpeg(r, faces::eventFrame(strtoul(param(r, "n").c_str(), nullptr, 10)));
+    });
+
+    // Last: the server also matches "/api/faces" for every "/api/faces/..." URL,
+    // so registered first it would answer the photo and live requests
+    get("/api/faces", USER, [](AsyncWebServerRequest* r) {
+        JsonDocument d;
+        faces::info(d.to<JsonObject>());
+        sendJson(r, d);
     });
 }
 

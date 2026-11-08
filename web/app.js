@@ -1309,7 +1309,7 @@ function faceWhen(e) {
 }
 
 function faceEventCard(e) {
-    return h('button', { class: 'clip', onclick: () => openFaceEvent(e), 'aria-label': `${faceName(e)}, ${faceWhen(e)}` },
+    return h('button', { class: 'clip face', onclick: () => openFaceEvent(e), 'aria-label': `${faceName(e)}, ${faceWhen(e)}` },
         h('div', { class: 'thumb' }, icon('face', 'lg'),
             h('img', { loading: 'lazy', alt: '', src: res(`api/faces/event?n=${e.n}`), onerror: ev => ev.target.remove() })),
         h('div', { class: 'meta' },
@@ -1329,7 +1329,7 @@ function faceEventsDialog(list) {
     const d = h('div', { class: 'dialog face-log', role: 'dialog', 'aria-modal': 'true' },
         h('div', { class: 'dialog-head' }, h('h2', { text: t('Хто був у кадрі') }), h('button', { class: 'icon-btn', 'aria-label': t('Закрити'), onclick: () => close() }, icon('x'))),
         h('div', { class: 'clips' }, list.map(e => faceEventCard(e))),
-        h('p', { class: 'tip', style: { marginTop: '14px' } }, icon('clock', 'sm'), t('Камера пам\'ятає останні 20 появ до перезавантаження.')));
+        h('p', { class: 'tip', style: { marginTop: '14px' } }, icon('clock', 'sm'), t('Камера пам\'ятає останні 100 появ. З картою пам\'яті вони зберігаються й після перезавантаження.')));
     const close = overlay(d);
 }
 
@@ -1948,7 +1948,11 @@ function settingsPage() {
     function toggle(title, desc, get, patch, show) {
         const sw = switchEl(false, v => save(patch(v)), title);
         refreshers.push(() => { sw.input.checked = !!get(); });
-        return row(title, desc, sw.el, show);
+        // The whole row is the button: the switch alone is a small target on a phone
+        const r = row(title, desc, sw.el, show);
+        r.classList.add('tap');
+        r.addEventListener('click', e => { if (e.target !== sw.input && !sw.input.disabled) sw.input.click(); });
+        return r;
     }
     function select(title, desc, options, get, patch, show) {
         const s = h('select', { 'aria-label': title, onchange: () => save(patch(isNaN(+s.value) ? s.value : +s.value)) },

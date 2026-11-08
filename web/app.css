@@ -259,7 +259,7 @@ input::placeholder { color: var(--faint); }
 
 /* Switch */
 .switch { position: relative; width: 56px; height: 32px; flex: none; }
-.switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; z-index: 1; touch-action: pan-y; }
+.switch input { position: absolute; inset: -10px; opacity: 0; margin: 0; cursor: pointer; z-index: 1; touch-action: pan-y; }
 .switch input:disabled { cursor: progress; }
 .switch input:disabled + .track { opacity: 0.7; }
 .switch .track {
@@ -663,6 +663,10 @@ main.content {
 .clip .time { font-weight: 700; flex: 1; }
 .clip .kind { display: inline-flex; align-items: center; gap: 4px; font-size: 0.78rem; color: var(--muted); }
 .clip .kind.m { color: var(--warn); }
+/* Face cards: the time under the name, a long name cut short */
+.clip.face .meta { flex-direction: column; align-items: stretch; gap: 2px; }
+.clip.face .time { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.clip.face .kind { white-space: nowrap; }
 
 .strip { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
 @media (min-width: 600px) and (max-width: 1099px) { .strip { grid-template-columns: repeat(4, 1fr); } }
@@ -814,6 +818,7 @@ main.content {
 }
 .set-row:first-of-type { border-top: 0; padding-top: 4px; }
 .set-row .txt { flex: 1; min-width: 0; }
+.set-row.tap { cursor: pointer; -webkit-tap-highlight-color: transparent; user-select: none; }
 .set-row .txt b { display: block; font-weight: 600; }
 .set-row .txt span { display: block; font-size: 0.86rem; color: var(--faint); margin-top: 2px; }
 .set-row.col { flex-direction: column; align-items: stretch; gap: 10px; }

@@ -478,7 +478,7 @@ const EN = {
     // faces
     "Незнайомець": "Stranger",
     "Хто був у кадрі": "Who was seen",
-    "Камера пам'ятає останні 20 появ до перезавантаження.": "The camera keeps the last 20 sightings until it restarts.",
+    "Камера пам'ятає останні 100 появ. З картою пам'яті вони зберігаються й після перезавантаження.": "The camera keeps the last 100 sightings. With a memory card they survive a restart.",
     "Поки нікого. Тут з'являться люди, яких побачить камера.": "Nobody yet. People the camera sees will show up here.",
     "Додати": "Add",
     "Потрібне оновлення через USB": "A USB update is needed",
