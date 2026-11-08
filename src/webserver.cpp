@@ -4,6 +4,7 @@
 #include <ESPAsyncWebServer.h>
 #include <Update.h>
 #include <WiFi.h>
+#include <esp_core_dump.h>
 #include <esp_heap_caps.h>
 #include <sys/time.h>
 
@@ -159,6 +160,27 @@ static void sendJpeg(AsyncWebServerRequest* r, std::shared_ptr<std::vector<uint8
 
 // ---------- status ----------
 
+// Where the crash that caused this start happened, from the core dump the
+// camera saved: "task pc backtrace..." (decode with addr2line and that
+// build's firmware.elf). Erased once read, so it never shows an old crash.
+static String lastCrash;
+
+static void readLastCrash() {
+    auto* cs = (esp_core_dump_summary_t*)ps_malloc(sizeof(esp_core_dump_summary_t));
+    if (cs && esp_core_dump_get_summary(cs) == ESP_OK) {
+        lastCrash = cs->exc_task;
+        char hex[12];
+        snprintf(hex, sizeof(hex), " %08x", (unsigned)cs->exc_pc);
+        lastCrash += hex;
+        for (uint32_t i = 0; i < cs->exc_bt_info.depth && i < 16; i++) {
+            snprintf(hex, sizeof(hex), " %08x", (unsigned)cs->exc_bt_info.bt[i]);
+            lastCrash += hex;
+        }
+        esp_core_dump_image_erase();
+    }
+    free(cs);
+}
+
 static void fillStatus(JsonObject o) {
     o["name"] = config::s.name;
     o["fw"] = FW_VERSION;
@@ -200,6 +222,7 @@ static void fillStatus(JsonObject o) {
     o["uptime"] = millis() / 1000;
     o["heap"] = ESP.getFreeHeap();
     o["psram"] = ESP.getFreePsram();
+    if (lastCrash.length()) o["lastCrash"] = lastCrash;
 }
 
 // ---------- routes ----------
@@ -435,11 +458,14 @@ static void routesCamera() {
                 if (!ok) return;
             }
             if (!Update.isRunning()) return;
-            // No video meanwhile: with a viewer on the relay, encrypting it and
-            // taking the upload kept core 0 so busy that the task watchdog
-            // restarted the camera a third of the way through
+            // The upload arrives faster than the flash takes it, and this task
+            // (priority 10 on core 0) then never gave core 0's idle task a turn:
+            // the task watchdog restarted the camera a third of the way through.
+            // So: no video meanwhile (encrypting it for the relay added to the
+            // load), and a short break every 32 KB.
             streamsrv::pause(true);
             if (Update.write(data, len) != len) return;
+            if ((index + len) / 32768 != index / 32768) vTaskDelay(pdMS_TO_TICKS(5));
             if (final) Update.end(true);
         });
 }
@@ -605,6 +631,7 @@ static void routesStatic() {
 }
 
 void begin() {
+    readLastCrash();
     routesAuth();
     routesCamera();
     routesRecordings();

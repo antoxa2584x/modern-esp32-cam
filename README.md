@@ -133,6 +133,11 @@ are in `src/board.h`. For the classic ESP32-CAM add `-e esp32cam` (e.g. `pio run
 Later updates can be done from the browser: **Settings → Device → Firmware**, choosing
 `.pio/build/esp32s3cam/firmware.bin`. Live video pauses while the file uploads.
 
+**Releases:** set `FW_VERSION` in `platformio.ini`, commit, then push a matching tag
+(`git tag v1.0.1 && git push origin v1.0.1`). GitHub Actions builds both boards and publishes
+a release with `*-update.bin` (for the browser update) and `*-full.bin` (first flash over USB
+at address 0x0). Released firmware has no relay baked in.
+
 ### 2. First setup
 
 1. Power the camera. It opens an open Wi-Fi network named `ESP32-Camera-XXXX`.

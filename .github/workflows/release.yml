@@ -1,0 +1,90 @@
+name: Release Firmware
+
+# Push a tag like v1.0.1 (matching FW_VERSION in platformio.ini) and this builds
+# both boards and publishes a release with, per board:
+#   <board>-<version>-update.bin  for Settings -> Device -> Firmware in the web UI
+#   <board>-<version>-full.bin    first flash over USB, written at address 0x0
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    # A stuck step (e.g. a slow package mirror) fails here instead of hanging for 6 h
+    timeout-minutes: 30
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Check the firmware version matches the tag
+      run: |
+        TAG="${GITHUB_REF_NAME}"
+        VERSION=$(sed -n 's/.*-DFW_VERSION=\\"\(.*\)\\".*/\1/p' platformio.ini)
+        if [ "${TAG#v}" != "$VERSION" ]; then
+          echo "::error::Tag $TAG does not match FW_VERSION $VERSION in platformio.ini"
+          exit 1
+        fi
+        echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    # The ESP32 toolchains are a few hundred MB: keep them between runs
+    - name: Cache PlatformIO
+      uses: actions/cache@v4
+      with:
+        path: ~/.platformio
+        key: pio-${{ hashFiles('platformio.ini') }}
+
+    - name: Install PlatformIO
+      run: pip install platformio
+
+    # No RELAY_HOST/RELAY_TOKEN here: released firmware has no relay baked in,
+    # each user enters their own server in Settings -> Remote access
+    - name: Build both boards
+      run: pio run -e esp32s3cam -e esp32cam
+
+    - name: Make the release files
+      run: |
+        ESPTOOL=~/.platformio/packages/tool-esptoolpy/esptool.py
+        BOOT_APP0=~/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin
+        mkdir -p out
+        # board env, file name, chip, bootloader offset
+        while read -r ENV NAME CHIP BOOT; do
+          B=.pio/build/$ENV
+          cp $B/firmware.bin "out/$NAME-$VERSION-update.bin"
+          python $ESPTOOL --chip $CHIP merge_bin -o "out/$NAME-$VERSION-full.bin" \
+            --flash_mode keep --flash_freq keep --flash_size keep \
+            $BOOT $B/bootloader.bin 0x8000 $B/partitions.bin 0xe000 $BOOT_APP0 0x10000 $B/firmware.bin
+        done <<'EOF'
+        esp32s3cam esp32-s3-cam esp32s3 0x0
+        esp32cam esp32-cam esp32 0x1000
+        EOF
+        ls -l out
+
+    - name: Publish the release
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        TAG="${GITHUB_REF_NAME}"
+        cat > notes.md <<EOF
+        **Update a camera:** Settings → Device → Firmware, choose \`esp32-s3-cam-$VERSION-update.bin\`
+        (\`esp32-cam-$VERSION-update.bin\` for the classic AI-Thinker ESP32-CAM).
+
+        **First flash over USB:** write the \`-full.bin\` file at address 0x0, e.g.
+        \`esptool.py write_flash 0x0 esp32-s3-cam-$VERSION-full.bin\`.
+        EOF
+        if gh release view "$TAG" > /dev/null 2>&1; then
+          gh release upload "$TAG" out/* --clobber
+        else
+          gh release create "$TAG" out/* --title "$TAG" --notes-file notes.md --generate-notes
+        fi

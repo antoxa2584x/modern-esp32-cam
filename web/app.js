@@ -145,10 +145,24 @@ function dayLabel(d) {
 
 const fmtTime = t => `${t.slice(0, 2)}:${t.slice(2, 4)}:${t.slice(4, 6)}`;
 
+// Restarts a CSS entrance animation on `el`
+function replay(el, cls) {
+    el.classList.remove(cls);
+    void el.offsetWidth;
+    el.classList.add(cls);
+}
+
+// Removes a toast after its exit animation
+function dismiss(el) {
+    if (!el.isConnected || el.classList.contains('out')) return;
+    el.classList.add('out');
+    setTimeout(() => el.remove(), 200);
+}
+
 function toast(msg, bad = false) {
     const el = h('div', { class: 'toast' + (bad ? ' bad' : '') }, icon(bad ? 'alert' : 'check', 'sm'), msg);
     document.getElementById('toasts').append(el);
-    setTimeout(() => el.remove(), bad ? 4500 : 2200);
+    setTimeout(() => dismiss(el), bad ? 4500 : 2200);
 }
 
 // A toast that stays up while something slow runs: set() changes its text
@@ -156,7 +170,7 @@ function progressToast(msg) {
     const text = h('span', { text: msg });
     const el = h('div', { class: 'toast' }, h('span', { class: 'spinner sm' }), text);
     document.getElementById('toasts').append(el);
-    return { set: s => { text.textContent = s; }, done: () => el.remove() };
+    return { set: s => { text.textContent = s; }, done: () => dismiss(el) };
 }
 
 // ---------- saving files ----------
@@ -183,9 +197,9 @@ function offerSave(blob, name) {
     const ua = navigator.userActivation;
     if (!ua || ua.isActive) return saveBlob(blob, name);
     const el = h('div', { class: 'toast toast-action' }, icon('check', 'sm'), h('span', { text: t('Відео готове') }),
-        h('button', { class: 'btn primary sm', onclick: () => { el.remove(); saveBlob(blob, name); } }, t('Зберегти')));
+        h('button', { class: 'btn primary sm', onclick: () => { dismiss(el); saveBlob(blob, name); } }, t('Зберегти')));
     document.getElementById('toasts').append(el);
-    setTimeout(() => el.remove(), 60000);
+    setTimeout(() => dismiss(el), 60000);
 }
 
 let savingRec = false;
@@ -498,8 +512,9 @@ const openOverlays = [];
 function overlay(content, { cls = '', onClose } = {}) {
     const ov = h('div', { class: 'overlay ' + cls });
     const close = () => {
-        if (!ov.isConnected) return;
-        ov.remove();
+        if (!ov.isConnected || ov.classList.contains('closing')) return;
+        ov.classList.add('closing');
+        setTimeout(() => ov.remove(), 160);
         openOverlays.splice(openOverlays.indexOf(close), 1);
         if (!openOverlays.length) document.body.classList.remove('locked');
         document.removeEventListener('keydown', onKey);
@@ -552,6 +567,16 @@ function field(label, control) {
 
 function switchEl(checked, onchange, label) {
     const input = h('input', { type: 'checkbox', checked, role: 'switch', 'aria-label': label, onchange: () => onchange(input.checked) });
+    // On phones people slide a switch, and a slide isn't a tap
+    let x0 = null;
+    input.addEventListener('touchstart', e => { x0 = e.touches[0].clientX; }, { passive: true });
+    input.addEventListener('touchend', e => {
+        const dx = x0 === null ? 0 : e.changedTouches[0].clientX - x0;
+        x0 = null;
+        if (Math.abs(dx) < 12) return;  // a tap: the browser toggles it
+        e.preventDefault();
+        if ((dx > 0) !== input.checked && !input.disabled) input.click();
+    });
     return { el: h('span', { class: 'switch' }, input, h('span', { class: 'track' })), input };
 }
 
@@ -931,6 +956,7 @@ function shell(app) {
         if (current) { pages[current].leave(); pages[current].el.classList.add('hidden'); }
         current = next;
         pages[next].el.classList.remove('hidden');
+        replay(pages[next].el, 'page-in');
         tabs.forEach(tab => {
             const on = tab.dataset.page === next;
             tab.classList.toggle('on', on);
@@ -1592,14 +1618,22 @@ function homePage() {
         info.lamp === false ? null : lampRow);
 
     // Security
+    // A status poll that answers before the camera has switched must not flip
+    // the switch back (over the relay that looked like a missed tap)
+    let secBusy = false;
     const secSwitch = switchEl(false, async on => {
+        secBusy = true;
+        secSwitch.input.disabled = true;
         try {
             await api('api/security', { on });
             toast(on ? t('Охорону увімкнено') : t('Охорону вимкнено'));
-            shellApi.poll();
         } catch (e) {
             secSwitch.input.checked = !on;
             showError(e);
+        } finally {
+            secBusy = false;
+            secSwitch.input.disabled = false;
+            shellApi.poll();
         }
     }, t('Охорона'));
     secSwitch.el.classList.add('big');
@@ -1607,6 +1641,10 @@ function homePage() {
     const secText = h('p');
     const secShield = h('div', { class: 'shield' }, icon('shield', 'lg'));
     const secBox = h('div', { class: 'security' }, secShield, h('div', { class: 'grow' }, secTitle, secText), secSwitch.el);
+    // The whole card is the switch: easier to hit with a thumb
+    secBox.addEventListener('click', e => {
+        if (e.target !== secSwitch.input && !secSwitch.input.disabled) secSwitch.input.click();
+    });
     const secCard = h('section', { class: 'card' }, secBox);
 
     // Stats
@@ -1707,7 +1745,7 @@ function homePage() {
         recBtn.lbl.textContent = st.rec.manual ? t('Зупинити') : t('Записати');
 
         // Security
-        secSwitch.input.checked = st.security;
+        if (!secBusy) secSwitch.input.checked = st.security;
         secBox.classList.toggle('on', st.security);
         secShield.replaceChildren(icon(st.security ? 'shield-check' : 'shield', 'lg'));
         secTitle.textContent = st.security ? t('Охорона увімкнена') : t('Охорона вимкнена');
@@ -2388,6 +2426,7 @@ function settingsPage() {
             if (on) navBtns[i].setAttribute('aria-current', 'true'); else navBtns[i].removeAttribute('aria-current');
         });
         panel.replaceChildren(sections.find(s => s[0] === id)[3]);
+        replay(panel, 'panel-in');
         if (id === 'faces' && S) loadPeople();
         // The live preview only runs while the picture settings are open
         if (preview) {

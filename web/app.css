@@ -98,6 +98,9 @@ html, body {
     min-height: 100%;
     overscroll-behavior-y: none;
 }
+/* Keep room for the scrollbar always: pages that fit and dialogs (which lock
+   scrolling) otherwise made it come and go, and the layout jumped sideways */
+html { scrollbar-gutter: stable; }
 
 body {
     font-family: var(--font);
@@ -256,7 +259,9 @@ input::placeholder { color: var(--faint); }
 
 /* Switch */
 .switch { position: relative; width: 56px; height: 32px; flex: none; }
-.switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; z-index: 1; }
+.switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; z-index: 1; touch-action: pan-y; }
+.switch input:disabled { cursor: progress; }
+.switch input:disabled + .track { opacity: 0.7; }
 .switch .track {
     position: absolute;
     inset: 0;
@@ -493,10 +498,11 @@ main.content {
     transform: translate(-50%, -50%);
     /* No "Live video from the camera" text while the first frame loads */
     color: transparent;
+    transition: opacity 0.35s;
 }
 .live img:not([src]),
 .live img[src="data:,"] {
-    visibility: hidden;
+    opacity: 0;
 }
 .live .placeholder {
     position: relative;
@@ -574,6 +580,9 @@ main.content {
     display: flex;
     align-items: center;
     gap: 16px;
+    cursor: pointer;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
 }
 .security .shield {
     width: 60px;
@@ -1020,6 +1029,52 @@ ol.howto { margin: 0; padding-left: 22px; color: var(--muted); display: flex; fl
 .dialog.face-photo img { display: block; width: 100%; border-radius: 12px; background: #120a24; margin-bottom: 8px; }
 .dialog.face-log { max-width: 760px; }
 
+/* ---------- motion ---------- */
+/* Fill "backwards" only: a transform left on a card would break the
+   position: fixed of the full-screen live view inside it */
+@keyframes rise { from { opacity: 0; transform: translateY(12px); } }
+@keyframes fade-out { to { opacity: 0; } }
+@keyframes pop-out { to { opacity: 0; transform: translateY(10px) scale(0.98); } }
+@keyframes toast-out { to { opacity: 0; transform: translateY(8px) scale(0.96); } }
+@keyframes shield-pop { 0% { transform: scale(0.82); } 60% { transform: scale(1.08); } }
+@keyframes tab-hop { 40% { transform: translateY(-3px); } }
+
+.page-in { animation: fade 0.25s ease-out; }
+.page-in .card { animation: rise 0.42s cubic-bezier(0.2, 0.8, 0.2, 1) backwards; }
+.page-in .card:nth-child(2) { animation-delay: 0.06s; }
+.page-in .card:nth-child(3) { animation-delay: 0.12s; }
+.page-in .card:nth-child(n + 4) { animation-delay: 0.18s; }
+.panel-in > * { animation: rise 0.3s ease-out backwards; }
+
+.clip { animation: rise 0.35s ease-out backwards; }
+.clips > .clip:nth-child(2), .strip > .clip:nth-child(2) { animation-delay: 0.04s; }
+.clips > .clip:nth-child(3), .strip > .clip:nth-child(3) { animation-delay: 0.08s; }
+.clips > .clip:nth-child(4), .strip > .clip:nth-child(4) { animation-delay: 0.12s; }
+.clips > .clip:nth-child(n + 5) { animation-delay: 0.16s; }
+
+.toast.out { animation: toast-out 0.2s ease-in forwards; }
+.overlay.closing { animation: fade-out 0.16s ease-in forwards; pointer-events: none; }
+.overlay.closing .dialog { animation: pop-out 0.16s ease-in forwards; }
+
+/* A springy switch whose knob stretches while pressed */
+.switch .track::after { transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), width 0.2s; }
+.switch input:active:not(:disabled) + .track::after { width: 32px; }
+.switch input:checked:active:not(:disabled) + .track::after { transform: translateX(18px); }
+.switch.big input:active:not(:disabled) + .track::after { width: 42px; }
+.switch.big input:checked:active:not(:disabled) + .track::after { transform: translateX(24px); }
+.security.on .shield { animation: shield-pop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1); }
+
+/* Press feedback */
+.icon-btn { transition: background 0.15s, transform 0.1s; }
+.icon-btn:active { transform: scale(0.92); }
+.tab, .set-tab, .chip { transition: background 0.2s, color 0.2s, transform 0.1s; }
+.tab:active, .set-tab:active, .chip:active { transform: scale(0.96); }
+.tab.on svg { animation: tab-hop 0.35s ease-out; }
+
 @media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-delay: 0s !important;
+        transition-duration: 0.01ms !important;
+    }
 }
