@@ -416,6 +416,7 @@ static void routesCamera() {
             if (!sameSite(r) || !authed(r)) return sendError(r, 401, "auth");
             if (Update.hasError() || !Update.isFinished()) {
                 Update.abort();
+                streamsrv::pause(false);
                 return sendError(r, 400, "update", "Файл не підходить або пошкоджений");
             }
             rebootAt = millis() + 1500;
@@ -434,6 +435,10 @@ static void routesCamera() {
                 if (!ok) return;
             }
             if (!Update.isRunning()) return;
+            // No video meanwhile: with a viewer on the relay, encrypting it and
+            // taking the upload kept core 0 so busy that the task watchdog
+            // restarted the camera a third of the way through
+            streamsrv::pause(true);
             if (Update.write(data, len) != len) return;
             if (final) Update.end(true);
         });

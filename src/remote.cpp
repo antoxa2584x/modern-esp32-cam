@@ -14,6 +14,11 @@ enum : uint8_t { T_OPEN = 1, T_DATA = 2, T_CLOSE = 3, T_PAUSE = 4, T_RESUME = 5 
 // stopped accepting. The relay queues requests beyond what the camera takes.
 static const int MAX_STREAMS = 5;
 static const int CHUNK = 4096;
+// The relay pings every 30 s and answers ours (every 15 s): this long without
+// a word from it, the connection is dead even if TCP hasn't noticed
+static const uint32_t SILENT_MS = 70000;
+// Not registered for this long (stuck connecting or failing): start afresh
+static const uint32_t STUCK_MS = 180000;
 
 struct Stream {
     int fd = -1;
@@ -27,6 +32,7 @@ static Stream streams[MAX_STREAMS];
 static volatile bool restartReq = true;
 static volatile bool wsUp = false;
 static volatile bool registered = false;
+static volatile uint32_t lastRx = 0;  // millis() of the last frame from the relay
 static String state = "off";  // shown in the UI
 static String publicUrl;
 static String uri, headers;
@@ -166,6 +172,7 @@ static void onEvent(void*, esp_event_base_t, int32_t id, void* data) {
     auto* e = (esp_websocket_event_data_t*)data;
     switch (id) {
         case WEBSOCKET_EVENT_CONNECTED:
+            lastRx = millis();
             wsUp = true;
             setState("connecting");
             break;
@@ -182,6 +189,7 @@ static void onEvent(void*, esp_event_base_t, int32_t id, void* data) {
             setState("unreachable");
             break;
         case WEBSOCKET_EVENT_DATA: {
+            lastRx = millis();  // pings and pongs too
             if (e->op_code != 1 && e->op_code != 2 && e->op_code != 0) break;
             if (e->payload_len > CHUNK + 16) break;  // never sent by the relay
             if (e->payload_offset == 0) rxLen = 0;
@@ -248,9 +256,27 @@ static void startClient() {
 // Moves responses from the local web server up to the relay
 static void pumpTask(void*) {
     uint8_t* buf = (uint8_t*)malloc(CHUNK);
+    uint32_t downSince = 0;
     for (;;) {
+        // While video streams up, unsent data is always queued, so TCP keep-alive
+        // never runs and a dropped link went unnoticed: the camera stayed
+        // offline until a reboot
+        uint32_t now = millis();
+        if (client && wsUp && now - lastRx > SILENT_MS) {
+            log_w("remote: relay silent for %u s, reconnecting", (unsigned)((now - lastRx) / 1000));
+            restartReq = true;
+        }
+        if (!client || registered) {
+            downSince = 0;
+        } else if (!downSince) {
+            downSince = now;
+        } else if (now - downSince > STUCK_MS) {
+            log_w("remote: not online for %u s, starting afresh", (unsigned)(STUCK_MS / 1000));
+            restartReq = true;
+        }
         if (restartReq) {
             restartReq = false;
+            downSince = 0;
             stopClient();
             config::lock();
             bool on = config::s.remoteEnabled && config::s.remoteHost.length();

@@ -1324,7 +1324,7 @@ function openPlayer(item, list) {
     const speedBtn = h('button', { class: 'speed', 'aria-label': t('Швидкість відтворення'), text: '1×' });
     const prevBtn = h('button', { class: 'icon-btn', 'aria-label': t('Попередній запис') }, icon('back'));
     const nextBtn = h('button', { class: 'icon-btn', 'aria-label': t('Наступний запис') }, icon('chevron'));
-    const dl = h('button', { class: 'icon-btn', 'aria-label': t('Завантажити відео'), title: t('Завантажити відео'), onclick: () => saveRecording(f) }, icon('download'));
+    const dl = h('button', { class: 'icon-btn', 'aria-label': t('Завантажити відео'), title: t('Завантажити відео'), onclick: () => saveWhilePaused() }, icon('download'));
     const del = h('button', { class: 'icon-btn', 'aria-label': t('Видалити запис'), title: t('Видалити запис') }, icon('trash'));
 
     const player = h('div', { class: 'player', role: 'dialog', 'aria-modal': 'true', 'aria-label': t('Перегляд запису') },
@@ -1423,6 +1423,15 @@ function openPlayer(item, list) {
             i += speed;
         }
         if (loop.running === s) loop.running = null;
+    }
+    // Playback fetches a frame at a time from the same camera: while it ran,
+    // the file came down several times slower
+    async function saveWhilePaused() {
+        if (savingRec) return;
+        const s = session, was = playing;
+        setPlaying(false);
+        await saveRecording(f);
+        if (was && alive && s === session && !playing) setPlaying(true);
     }
     function jump(sec) {
         i = Math.max(0, Math.min(frames - 1, i + Math.round(sec * fps)));

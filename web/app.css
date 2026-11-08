@@ -491,6 +491,12 @@ main.content {
     height: 100%;
     object-fit: contain;
     transform: translate(-50%, -50%);
+    /* No "Live video from the camera" text while the first frame loads */
+    color: transparent;
+}
+.live img:not([src]),
+.live img[src="data:,"] {
+    visibility: hidden;
 }
 .live .placeholder {
     position: relative;

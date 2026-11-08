@@ -10,6 +10,15 @@
 namespace streamsrv {
 static const int MAX_CLIENTS = 4;
 static volatile int clients = 0;
+// Accepted connections for the workers. A task per request leaked ~550 bytes of
+// internal RAM each time (2 blocks the task's deletion left behind): through the
+// relay, a few minutes of snapshots ran the camera out and Wi-Fi and both web
+// servers froze until a reboot. The workers live for good instead.
+static QueueHandle_t pending;
+static volatile uint32_t pausedAt = 0;  // 0: not paused
+
+// An upload that broke off never says it ended
+static bool paused() { return pausedAt && millis() - pausedAt < 30000; }
 
 static bool sendAll(int fd, const void* data, size_t len) {
     const uint8_t* p = (const uint8_t*)data;
@@ -99,7 +108,7 @@ static void stream(int fd, int maxFps, const String& req) {
     uint32_t minGap = 1000 / constrain(maxFps, 1, 15);
     uint32_t last = 0;
     cam::addViewer();
-    for (;;) {
+    while (!paused()) {
         uint32_t since = millis() - last;
         if (since < minGap) vTaskDelay(pdMS_TO_TICKS(minGap - since));
         size_t len = cam::waitFrame(buf, cap, seq, 3000);
@@ -145,8 +154,7 @@ static void snapshot(int fd, const String& req) {
     free(buf);
 }
 
-static void clientTask(void* arg) {
-    int fd = (int)(intptr_t)arg;
+static void serve(int fd) {
     struct timeval tv = {5, 0};
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
@@ -168,6 +176,8 @@ static void clientTask(void* arg) {
         reply(fd, "405 Method Not Allowed", "");
     } else if (auth::configured() && !auth::valid(cookieValue(req, "sid"))) {
         reply(fd, "401 Unauthorized", "login required");
+    } else if (paused()) {
+        reply(fd, "503 Service Unavailable", "updating");
     } else if (base == "/stream") {
         stream(fd, queryInt(path, "fps", 15), req);
     } else if (base == "/snapshot") {
@@ -177,8 +187,15 @@ static void clientTask(void* arg) {
     }
     shutdown(fd, SHUT_RDWR);
     close(fd);
-    clients = clients - 1;
-    vTaskDelete(nullptr);
+}
+
+static void workerTask(void*) {
+    for (;;) {
+        int fd;
+        if (xQueueReceive(pending, &fd, portMAX_DELAY) != pdTRUE) continue;
+        serve(fd);
+        clients = clients - 1;
+    }
 }
 
 static void acceptTask(void*) {
@@ -208,12 +225,15 @@ static void acceptTask(void*) {
             continue;
         }
         clients = clients + 1;
-        if (xTaskCreatePinnedToCore(clientTask, "view", 4096, (void*)(intptr_t)fd, 2, nullptr, 0) != pdPASS) {
-            clients = clients - 1;
-            close(fd);
-        }
+        xQueueSend(pending, &fd, portMAX_DELAY);  // never full: at most MAX_CLIENTS are out
     }
 }
 
-void begin() { xTaskCreatePinnedToCore(acceptTask, "streamsrv", 3072, nullptr, 2, nullptr, 0); }
+void pause(bool on) { pausedAt = on ? millis() | 1 : 0; }
+
+void begin() {
+    pending = xQueueCreate(MAX_CLIENTS, sizeof(int));
+    for (int i = 0; i < MAX_CLIENTS; i++) xTaskCreatePinnedToCore(workerTask, "view", 4096, nullptr, 2, nullptr, 0);
+    xTaskCreatePinnedToCore(acceptTask, "streamsrv", 3072, nullptr, 2, nullptr, 0);
+}
 }  // namespace streamsrv
