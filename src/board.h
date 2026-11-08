@@ -1,6 +1,6 @@
 #pragma once
 // Board pin maps. The PlatformIO environment picks one with -DBOARD_...;
-// AI-Thinker ESP32-CAM is the default. A pin of -1 means "not on this board".
+// without one it is the AI-Thinker ESP32-CAM. A pin of -1 means "not on this board".
 
 #if defined(BOARD_ESP32S3_CAM)
 // ESP32-S3-CAM N16R8 (HW-679, ESP32-CAM shape), same map as Freenove's

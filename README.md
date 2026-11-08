@@ -2,12 +2,13 @@
 
 <img src="web/icon.svg" width="88" alt="">
 
-# ESP32-CAM Security Camera
+# ESP32-S3 Security Camera
 
-**Turn a $10 AI-Thinker ESP32-CAM into a self-hosted security camera with motion recording,
-a polished web app and secure remote access — no cloud, no app store, no port forwarding.**
+**Turn an ESP32-S3-CAM board into a self-hosted security camera with motion recording,
+face recognition, a polished web app and secure remote access — no cloud, no app store,
+no port forwarding.**
 
-![Platform](https://img.shields.io/badge/platform-ESP32--CAM-7c5cbf)
+![Platform](https://img.shields.io/badge/platform-ESP32--S3-7c5cbf)
 ![Framework](https://img.shields.io/badge/built%20with-PlatformIO-f5822a)
 ![UI](https://img.shields.io/badge/UI-vanilla%20JS-f7df1e)
 ![Languages](https://img.shields.io/badge/languages-EN%20%7C%20UK-0057b7)
@@ -23,7 +24,7 @@ a polished web app and secure remote access — no cloud, no app store, no port 
 
 - 📹 **Live view** — MJPEG stream that reconnects by itself when it stalls, snapshot, flash lamp with brightness (on boards that have one), full screen, one-tap manual recording.
 - 🛡️ **Security mode** — motion detection records AVI clips to the microSD card, including a few seconds *before* the motion. Long clips are split automatically.
-- 🙂 **Face recognition** *(ESP32-S3 board only)* — names known people over the live picture, marks everyone else as a stranger, and keeps a "who was seen" log with photos. Up to 16 face photos are remembered on the camera itself (Espressif esp-dl models, nothing leaves the device).
+- 🙂 **Face recognition** — names known people over the live picture, marks everyone else as a stranger, and keeps a "who was seen" log with photos. Up to 16 face photos are remembered on the camera itself (Espressif esp-dl models, nothing leaves the device).
 - 🎞️ **Recordings browser** — grouped by day, filter by motion / manual, in-browser player with seeking, speed and download as **MP4** that plays on any phone (converted in the browser). Delete one, a day, or everything.
 - ♻️ **Never runs out of space** — the oldest recordings are removed when the card fills up (keeps 5 % of the card, at least 100 MB, free).
 - 📶 **Zero-config setup** — the camera opens its own Wi-Fi `ESP32-Camera-XXXX`; the setup wizard pops up on most phones and walks you through Wi-Fi and login.
@@ -92,15 +93,16 @@ a polished web app and secure remote access — no cloud, no app store, no port 
 
 | Part | Notes |
 | --- | --- |
-| AI-Thinker ESP32-CAM | OV2640, 4 MB flash, PSRAM |
-| *or* ESP32-S3-CAM N16R8 (HW-679) | ESP32-S3, 16 MB flash, 8 MB PSRAM; use an **OV2640** or **OV3660** camera (the RHYX M21-45 it often ships with can't make JPEG) |
-| ESP32-CAM-MB USB board | first flash of the ESP32-CAM |
-| USB-TTL adapter (CP2102, CH340…) | first flash of the S3 board, see below |
+| **ESP32-S3-CAM N16R8 (HW-679)** | ESP32-S3, 16 MB flash, 8 MB PSRAM; use an **OV2640** or **OV3660** camera (the RHYX M21-45 it often ships with can't make JPEG) |
+| USB-TTL adapter (CP2102, CH340…) | first flash only, see below |
 | microSD card | up to 32 GB, FAT32 |
-| 5 V power supply | a stable one — Wi-Fi, the camera and the lamp draw spikes |
+| 5 V power supply | a stable one — Wi-Fi and the camera draw spikes |
 
-<details>
-<summary><b>Notes on the HW-679 (ESP32-S3) board</b></summary>
+> The classic **AI-Thinker ESP32-CAM** (OV2640, 4 MB flash) still builds and runs (`-e esp32cam`,
+> first flash with the ESP32-CAM-MB USB board), but without face recognition, and with less
+> memory to spare for remote access. It does have a switchable flash lamp, which the HW-679 lacks.
+
+### Notes on the HW-679 board
 
 - **Flashing:** connect only adapter TX→RX, RX→TX and GND, and power the board from its own 5 V
   supply (fed from the adapter's 5 V pin it browns out as soon as Wi-Fi starts). The adapter has no
@@ -109,8 +111,8 @@ a polished web app and secure remote access — no cloud, no app store, no port 
 - **Pins:** camera and microSD (CLK 39, CMD 38, D0 40) are verified. The small status LED is GPIO2.
   The white flash LED on our board is not wired to any GPIO (every free pin was tested), so there
   is no lamp button on this board.
-
-</details>
+- **Mounting:** if the camera hangs upside down, turn on *Flip* and *Mirror* (see [Recovery](#-recovery)),
+  or faces won't be detected.
 
 ## 🚀 Quick start
 
@@ -120,17 +122,16 @@ Requires [PlatformIO](https://platformio.org/).
 
 ```bash
 pio run                    # build (also gzips web/ into src/web_assets.h)
-pio run -t upload          # flash over the ESP32-CAM-MB USB board
+pio run -t upload          # flash over the USB-TTL adapter (BOOT + RST, see above)
 pio device monitor         # serial log, 115200 baud
 ```
 
-For the ESP32-S3 board add `-e esp32s3cam` (e.g. `pio run -e esp32s3cam -t upload`). Pin maps
-for both boards are in `src/board.h`. The S3's partition table (`partitions_16mb.csv`) has a
-`faces` partition for remembered faces, so its first flash must be over USB; browser updates
-keep the partition table they find.
+The partition table (`partitions_16mb.csv`) has a `faces` partition for remembered faces, so
+the first flash must be over USB; browser updates keep the partition table they find. Pin maps
+are in `src/board.h`. For the classic ESP32-CAM add `-e esp32cam` (e.g. `pio run -e esp32cam -t upload`).
 
 Later updates can be done from the browser: **Settings → Device → Firmware**, choosing
-`.pio/build/esp32cam/firmware.bin` (or `.pio/build/esp32s3cam/firmware.bin`).
+`.pio/build/esp32s3cam/firmware.bin`. Live video pauses while the file uploads.
 
 ### 2. First setup
 
@@ -244,12 +245,14 @@ Translations live in `web/i18n.js`, keyed by the Ukrainian source text.
 
 ### Memory (read before adding features)
 
-The ESP32's internal RAM is small, and Wi-Fi needs it too: when it runs low, Wi-Fi silently drops
+The ESP32-S3's internal RAM is small, and Wi-Fi needs it too: when it runs low, Wi-Fi silently drops
 packets and the web servers stall. This Arduino build keeps TLS and every allocation up to 4 KB in
 internal RAM, so `src/main.cpp` sends TLS (the relay connection, ~40 KB) and anything from 512 bytes
 up to PSRAM. Internal RAM free is the `heap` value in `/api/status`; keep it well above 30 KB with
 remote access on and someone watching. Two things must stay internal: task stacks (this build can't
-put them in PSRAM) and buffers written to flash (see the firmware update handler).
+put them in PSRAM) and buffers written to flash (see the firmware update handler). Don't create a
+task per request: each finished task left ~565 bytes behind, which is why the stream server on
+port 81 runs a fixed pool of workers.
 
 lwIP here has only 16 TCP connections, and every remote request costs the camera two (the tunnel
 connects to its own web server). So the camera takes at most 5 tunnel streams (`src/remote.cpp`)
