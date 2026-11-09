@@ -118,7 +118,10 @@ no port forwarding.**
 
 ### 1. Build & flash
 
-Requires [PlatformIO](https://platformio.org/).
+Requires [PlatformIO](https://platformio.org/). The firmware uses Arduino-ESP32 3.3 through the
+[pioarduino](https://github.com/pioarduino/platform-espressif32) platform, which `platformio.ini`
+downloads by itself. The ESP-IDF components its precompiled libraries lack are in `lib/`: the
+WebSocket client and the face models (repacked with `scripts/pack_espdl.py`).
 
 ```bash
 pio run                    # build (also gzips web/ into src/web_assets.h)
@@ -127,7 +130,9 @@ pio device monitor         # serial log, 115200 baud
 ```
 
 The partition table (`partitions_16mb.csv`) has a `faces` partition for remembered faces, so
-the first flash must be over USB; browser updates keep the partition table they find. Pin maps
+the first flash must be over USB; browser updates keep the partition table they find. Its app
+slots grew from 4 to 6 MB with Arduino 3, so an S3 camera on firmware 1.3.0 or older needs one
+more USB flash (the browser refuses the bigger file; remembered faces are lost). Pin maps
 are in `src/board.h`. For the classic ESP32-CAM add `-e esp32cam` (e.g. `pio run -e esp32cam -t upload`).
 
 Later updates can be done from the browser: **Settings → Device → Firmware**, choosing
@@ -284,7 +289,9 @@ up to PSRAM. Internal RAM free is the `heap` value in `/api/status`; keep it wel
 remote access on and someone watching. Two things must stay internal: task stacks (this build can't
 put them in PSRAM) and buffers written to flash (see the firmware update handler). Don't create a
 task per request: each finished task left ~565 bytes behind, which is why the stream server on
-port 81 runs a fixed pool of workers.
+port 81 runs a fixed pool of workers. esp-dl ignores the 512-byte rule (it allocates internal RAM
+first), so `src/faces.cpp` holds internal RAM down while the face models load: without that they
+took ~60 KB of it.
 
 lwIP here has only 16 TCP connections, and every remote request costs the camera two (the tunnel
 connects to its own web server). So the camera takes at most 5 tunnel streams (`src/remote.cpp`)

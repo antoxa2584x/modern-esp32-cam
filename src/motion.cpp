@@ -1,6 +1,6 @@
 #include "motion.h"
 
-#include <esp_jpg_decode.h>
+#include <JPEGDEC.h>
 
 #include "camera.h"
 #include "config.h"
@@ -17,45 +17,51 @@ static volatile bool resetReq = true;
 
 // Decoder state: accumulates luminance per grid cell
 struct Grid {
-    uint16_t imgW, imgH;
+    int imgW, imgH;
     uint32_t sum[CELLS];
     uint16_t cnt[CELLS];
-    const uint8_t* jpg;
-    size_t jpgLen;
 };
 
-static size_t reader(void* arg, size_t index, uint8_t* buf, size_t len) {
-    Grid* g = (Grid*)arg;
-    if (index + len > g->jpgLen) len = g->jpgLen - index;
-    if (buf) memcpy(buf, g->jpg + index, len);
-    return len;
-}
+static JPEGDEC* jpeg = nullptr;  // ~17 KB of state: kept in PSRAM
 
-static bool writer(void* arg, uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint8_t* data) {
-    Grid* g = (Grid*)arg;
-    if (!data) {
-        if (x == 0 && y == 0) {
-            g->imgW = w;
-            g->imgH = h;
-        }
-        return true;
-    }
-    if (!g->imgW || !g->imgH) return false;
-    for (int j = 0; j < h; j++) {
-        int py = y + j;
-        int cy = py * GH / g->imgH;
-        if (cy >= GH) cy = GH - 1;
-        const uint8_t* p = data + j * w * 3;
-        for (int i = 0; i < w; i++, p += 3) {
-            int cx = (x + i) * GW / g->imgW;
-            if (cx >= GW) cx = GW - 1;
-            int c = cy * GW + cx;
-            // Channel order doesn't matter: R and B get the same weight
-            g->sum[c] += (p[0] + 2 * p[1] + p[2]) >> 2;
+// Blocks of RGB565 pixels of the 1/8 scale picture
+static int drawBlock(JPEGDRAW* d) {
+    Grid* g = (Grid*)d->pUser;
+    int cw = min(d->iWidth, g->imgW - d->x), ch = min(d->iHeight, g->imgH - d->y);
+    for (int j = 0; j < ch; j++) {
+        int cy = (d->y + j) * GH / g->imgH;
+        const uint16_t* p = d->pPixels + j * d->iWidth;
+        for (int i = 0; i < cw; i++) {
+            int c = cy * GW + (d->x + i) * GW / g->imgW;
+            uint16_t v = p[i];
+            // Luma-ish: R and B 5 bits, G 6 bits, each scaled to 0..255
+            g->sum[c] += (((v >> 8) & 0xF8) + 2 * ((v >> 3) & 0xFC) + ((v << 3) & 0xF8)) >> 2;
             g->cnt[c]++;
         }
     }
-    return true;
+    return 1;
+}
+
+// JPEGDEC, not esp_jpg_decode: Arduino 3's camera library no longer exports
+// it, and the S3's ROM decoder rejected the OV3660's JPEGs
+static bool decode(Grid& g, const uint8_t* jpg, size_t len) {
+    if (!jpeg) {
+        void* mem = ps_malloc(sizeof(JPEGDEC));
+        if (!mem) return false;
+        jpeg = new (mem) JPEGDEC();
+    }
+    if (!jpeg->openRAM((uint8_t*)jpg, len, drawBlock)) return false;
+    g.imgW = jpeg->getWidth() >> 3;
+    g.imgH = jpeg->getHeight() >> 3;
+    if (g.imgW < GW || g.imgH < GH) {
+        jpeg->close();
+        return false;
+    }
+    jpeg->setPixelType(RGB565_LITTLE_ENDIAN);
+    jpeg->setUserPointer(&g);
+    int ok = jpeg->decode(0, 0, JPEG_SCALE_EIGHTH);
+    jpeg->close();
+    return ok == 1;
 }
 
 static void task(void*) {
@@ -84,9 +90,7 @@ static void task(void*) {
         if (!len) continue;
 
         memset(&g, 0, sizeof(g));
-        g.jpg = buf;
-        g.jpgLen = len;
-        if (esp_jpg_decode(len, JPG_SCALE_8X, reader, writer, &g) != ESP_OK) continue;
+        if (!decode(g, buf, len)) continue;
 
         float meanDiff = 0;
         for (int c = 0; c < CELLS; c++) {

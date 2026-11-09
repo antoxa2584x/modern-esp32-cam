@@ -45,8 +45,8 @@ jobs:
         path: ~/.platformio
         key: pio-${{ hashFiles('platformio.ini') }}
 
-    - name: Install PlatformIO
-      run: pip install platformio
+    - name: Install PlatformIO and esptool
+      run: pip install platformio "esptool>=5,<6"
 
     # No RELAY_HOST/RELAY_TOKEN here: released firmware has no relay baked in,
     # each user enters their own server in Settings -> Remote access.
@@ -59,15 +59,14 @@ jobs:
 
     - name: Make the release files
       run: |
-        ESPTOOL=~/.platformio/packages/tool-esptoolpy/esptool.py
         BOOT_APP0=~/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin
         mkdir -p out
         # board env, file name, chip, bootloader offset
         while read -r ENV NAME CHIP BOOT; do
           B=.pio/build/$ENV
           cp $B/firmware.bin "out/$NAME-$VERSION-update.bin"
-          python $ESPTOOL --chip $CHIP merge_bin -o "out/$NAME-$VERSION-full.bin" \
-            --flash_mode keep --flash_freq keep --flash_size keep \
+          esptool --chip $CHIP merge-bin -o "out/$NAME-$VERSION-full.bin" \
+            --flash-mode keep --flash-freq keep --flash-size keep \
             $BOOT $B/bootloader.bin 0x8000 $B/partitions.bin 0xe000 $BOOT_APP0 0x10000 $B/firmware.bin
         done <<'EOF'
         esp32s3cam esp32-s3-cam esp32s3 0x0
@@ -85,7 +84,7 @@ jobs:
         (\`esp32-cam-$VERSION-update.bin\` for the classic AI-Thinker ESP32-CAM).
 
         **First flash over USB:** write the \`-full.bin\` file at address 0x0, e.g.
-        \`esptool.py write_flash 0x0 esp32-s3-cam-$VERSION-full.bin\`.
+        \`esptool write-flash 0x0 esp32-s3-cam-$VERSION-full.bin\`.
         EOF
         if gh release view "$TAG" > /dev/null 2>&1; then
           gh release upload "$TAG" out/* --clobber

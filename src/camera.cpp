@@ -12,6 +12,23 @@ namespace cam {
 static bool initOk = false;
 static const char* sensorName = "";
 static int maxSize = FRAMESIZE_UXGA;  // largest frame size the sensor and buffers allow
+
+// Frame sizes as the settings and the pages number them: esp32-camera's
+// framesize_t up to Arduino 2. Arduino 3's library inserted 128x128 and
+// 320x320, which moved every size from QCIF up (HD came out as 800x600).
+static const framesize_t SIZES[] = {
+    FRAMESIZE_96X96, FRAMESIZE_QQVGA, FRAMESIZE_QCIF, FRAMESIZE_HQVGA, FRAMESIZE_240X240, FRAMESIZE_QVGA,
+    FRAMESIZE_CIF,   FRAMESIZE_HVGA,  FRAMESIZE_VGA,  FRAMESIZE_SVGA,  FRAMESIZE_XGA,     FRAMESIZE_HD,
+    FRAMESIZE_SXGA,  FRAMESIZE_UXGA,  FRAMESIZE_FHD,  FRAMESIZE_P_HD,  FRAMESIZE_P_3MP,   FRAMESIZE_QXGA,
+};
+static const int SIZE_COUNT = sizeof(SIZES) / sizeof(SIZES[0]);
+
+// The largest setting the sensor allows
+static int maxSetting() {
+    int n = 0;
+    while (n + 1 < SIZE_COUNT && SIZES[n + 1] <= maxSize) n++;
+    return n;
+}
 static const int FB_COUNT = 2;
 static SemaphoreHandle_t hubMtx;
 static SemaphoreHandle_t sensorMtx;
@@ -173,13 +190,13 @@ bool begin() {
 
 bool ok() { return initOk; }
 const char* sensor() { return sensorName; }
-int maxFramesize() { return maxSize; }
+int maxFramesize() { return maxSetting(); }
 
 void apply(const CameraSettings& k) {
     if (!initOk) return;
     xSemaphoreTake(sensorMtx, portMAX_DELAY);
     sensor_t* s = esp_camera_sensor_get();
-    int fs = min(k.framesize, maxSize);
+    framesize_t fs = SIZES[constrain(k.framesize, 0, maxSetting())];
     if (s->status.framesize != fs) {
         s->set_framesize(s, (framesize_t)fs);
         frameSizeChanged = true;
@@ -246,14 +263,13 @@ void setLamp(int percent) {
     if (!HAS_LAMP) return;
     static bool attached = false;
     if (!attached) {
-        ledcSetup(LAMP_CHANNEL, 5000, 8);
-        ledcAttachPin(LAMP_PIN, LAMP_CHANNEL);
+        ledcAttachChannel(LAMP_PIN, 5000, 8, LAMP_CHANNEL);
         attached = true;
     }
     lampPct = constrain(percent, 0, 100);
     // Perceived brightness is roughly quadratic
     int duty = (lampPct * lampPct * 255) / 10000;
-    ledcWrite(LAMP_CHANNEL, duty);
+    ledcWrite(LAMP_PIN, duty);
 }
 int lamp() { return lampPct; }
 

@@ -88,7 +88,7 @@ static void recoverOpenClip() {
         store::fs().remove(part);
         return;
     }
-    String final = part.substring(0, part.length() - 5) + "_" + String(max(1u, frames / fps)) + "_m.avi";
+    String final = part.substring(0, part.length() - 5) + "_" + String(max<uint32_t>(1, frames / fps)) + "_m.avi";
     store::fs().rename(part, final);
     log_i("recovered %s (%u frames)", final.c_str(), frames);
 }

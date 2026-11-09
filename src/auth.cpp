@@ -76,12 +76,8 @@ static String hex(const uint8_t* b, size_t n) {
 
 static String derive(const String& pass, const String& saltHex, int iter) {
     uint8_t out[32];
-    mbedtls_md_context_t ctx;
-    mbedtls_md_init(&ctx);
-    mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 1);
-    mbedtls_pkcs5_pbkdf2_hmac(&ctx, (const uint8_t*)pass.c_str(), pass.length(), (const uint8_t*)saltHex.c_str(),
-                              saltHex.length(), iter, sizeof(out), out);
-    mbedtls_md_free(&ctx);
+    mbedtls_pkcs5_pbkdf2_hmac_ext(MBEDTLS_MD_SHA256, (const uint8_t*)pass.c_str(), pass.length(),
+                                  (const uint8_t*)saltHex.c_str(), saltHex.length(), iter, sizeof(out), out);
     return hex(out, sizeof(out));
 }
 

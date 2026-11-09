@@ -10,7 +10,7 @@ namespace cam {
 bool begin();
 bool ok();
 const char* sensor();  // "OV2640", "OV3660", ... ("" before init)
-int maxFramesize();    // largest framesize_t usable with this sensor
+int maxFramesize();    // largest frame size setting (Arduino 2 framesize_t numbers) for this sensor
 void apply(const CameraSettings& c);  // push settings to the sensor
 
 // Copies the newest frame if it is newer than `seq`. Grows `buf` (PSRAM) as

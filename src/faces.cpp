@@ -11,9 +11,8 @@
 
 #include "camera.h"
 #include "config.h"
-#include "face_recognition_112_v1_s8.hpp"
-#include "human_face_detect_mnp01.hpp"
-#include "human_face_detect_msr01.hpp"
+#include "human_face_detect.hpp"
+#include "human_face_recognition.hpp"
 #include "motion.h"
 #include "storage.h"
 
@@ -23,7 +22,7 @@ static const int INTERVAL_MS = 300;  // between analysed frames
 static const int MAX_FACES = 3;      // recognised per frame (each takes ~100 ms)
 static const int MIN_ENROLL_PX = 40; // face width needed to remember it
 static const uint32_t ENROLL_TIMEOUT_MS = 25000;
-static const int EMB = 512;          // embedding length of the 112 v1 model
+static const int EMB = 512;          // embedding length of the MFN model
 static const int THUMB = 96;         // remembered face photo, square
 static const int THUMB_MAX = 4096;   // its JPEG size limit
 static const int MAX_EVENTS = 100;  // sightings kept (on the SD card: across restarts)
@@ -33,6 +32,9 @@ static const uint32_t UNKNOWN_REPEAT_MS = 30000;  // a stranger logged again aft
 // recorded this task gets little CPU and checks frames seconds apart.
 static const uint32_t STRANGER_CONFIRM_MS = 10000;
 static const uint32_t MAGIC = 0x45434146;         // "FACE"
+// 1: esp-dl 1 (Arduino 2) embeddings, 2: esp-dl 3 MFN. They don't mix: version 1
+// records are enrolled again from their photo.
+static const uint16_t VERSION = 2;
 
 // One remembered photo; the "faces" partition holds a Header and these
 struct Record {
@@ -71,13 +73,9 @@ struct Seen {
 
 static SemaphoreHandle_t mtx;
 static const esp_partition_t* part = nullptr;
-// Slots stay in place: the recogniser may keep pointers to their embeddings
 static Record* slots = nullptr;
 static bool used[MAX_PEOPLE];
-static int libId[MAX_PEOPLE];
-static std::vector<int> toDelete;  // recogniser ids of forgotten slots
 static volatile bool saveReq = false;
-static volatile bool threshReq = true;
 static volatile bool isRunning = false;
 
 static String enrollState = "idle";  // look, many, far, done, timeout, full, error
@@ -189,7 +187,7 @@ static void save() {
     if (!part) return;
     Header h = {};
     h.magic = MAGIC;
-    h.version = 1;
+    h.version = VERSION;
     bool keep[MAX_PEOPLE];
     lock();
     memcpy(keep, used, sizeof(keep));
@@ -205,19 +203,73 @@ static void save() {
     esp_partition_write(part, 0, &h, sizeof(h));
 }
 
-static void restore(FaceRecognition112V1S8& rec) {
+// ---------- the models ----------
+
+static dl::image::img_t view(const Img& m) {
+    return {m.px, (uint16_t)m.w, (uint16_t)m.h, dl::image::DL_IMAGE_PIX_TYPE_BGR888};
+}
+
+// Biggest faces first: they are the closest and the most recognisable
+static void sortBySize(std::list<dl::detect::result_t>& found) {
+    found.sort([](const dl::detect::result_t& a, const dl::detect::result_t& b) {
+        return (a.box[2] - a.box[0]) > (b.box[2] - b.box[0]);
+    });
+}
+
+// The face's embedding (unit length), false if the model gave none
+static bool embed(HumanFaceFeat& feat, const Img& m, const dl::detect::result_t& f, float* out) {
+    if (f.keypoint.size() < 10) return false;
+    dl::TensorBase* t = feat.run(view(m), f.keypoint);
+    if (!t || t->get_size() != EMB) return false;
+    memcpy(out, t->data, EMB * sizeof(float));
+    return true;
+}
+
+// The closest remembered person, -1 if nobody is close enough. Call locked.
+static int match(const float* emb) {
+    static const float T[3] = {0.45f, 0.55f, 0.65f};
+    float best = T[constrain(config::s.faces.accuracy, 1, 3) - 1];
+    int found = -1;
+    for (int k = 0; k < MAX_PEOPLE; k++) {
+        if (!used[k]) continue;
+        float sim = 0;  // cosine similarity: both are unit length
+        for (int j = 0; j < EMB; j++) sim += emb[j] * slots[k].emb[j];
+        if (sim > best) {
+            best = sim;
+            found = k;
+        }
+    }
+    return found;
+}
+
+static void restore(HumanFaceDetect& det, HumanFaceFeat& feat) {
     Header h;
     if (!part || esp_partition_read(part, 0, &h, sizeof(h)) != ESP_OK) return;
-    if (h.magic != MAGIC || h.version != 1 || h.count > MAX_PEOPLE) return;
+    if (h.magic != MAGIC || (h.version != 1 && h.version != VERSION) || h.count > MAX_PEOPLE) return;
+    int n = 0;
+    Img m = {};
     for (int i = 0; i < h.count; i++) {
-        if (esp_partition_read(part, sizeof(Header) + i * sizeof(Record), &slots[i], sizeof(Record)) != ESP_OK) break;
-        slots[i].name[sizeof(slots[i].name) - 1] = 0;
-        dl::Tensor<float> emb;
-        emb.set_element(slots[i].emb, false).set_shape({EMB});
-        libId[i] = rec.enroll_id(emb, slots[i].name, false);
-        used[i] = true;
+        Record& r = slots[n];
+        if (esp_partition_read(part, sizeof(Header) + i * sizeof(Record), &r, sizeof(Record)) != ESP_OK) break;
+        r.name[sizeof(r.name) - 1] = 0;
+        if (h.version != VERSION) {
+            // An earlier model's embedding: the remembered photo gives a new one
+            bool ok = false;
+            if (r.jpgLen && r.jpgLen <= THUMB_MAX && decode(m, r.jpg, r.jpgLen)) {
+                auto& found = det.run(view(m));
+                sortBySize(found);
+                ok = !found.empty() && embed(feat, m, found.front(), r.emb);
+            }
+            if (!ok) {
+                log_w("faces: %s has to be added again", r.name);
+                continue;
+            }
+        }
+        used[n++] = true;
     }
-    log_i("faces: %d remembered", h.count);
+    free(m.px);
+    if (h.version != VERSION) saveReq = true;
+    log_i("faces: %d remembered", n);
 }
 
 // ---------- sightings ----------
@@ -263,7 +315,8 @@ static void addEvent(const Event& e) {
 static void logEvent(const String& name, const uint8_t* jpg, size_t len) {
     Event e = {};
     lock();
-    e.seq = nextSeq++;
+    e.seq = nextSeq;
+    nextSeq = nextSeq + 1;
     unlock();
     time_t now = time(nullptr);
     e.when = now > 1700000000 ? now : 0;
@@ -349,11 +402,6 @@ static uint32_t lastLogged(const String& name, bool update) {
 
 // ---------- the task ----------
 
-static float threshold() {
-    static const float T[3] = {0.45f, 0.55f, 0.65f};
-    return T[constrain(config::s.faces.accuracy, 1, 3) - 1];
-}
-
 static bool wanted() {
     if (!cam::ok()) return false;
     if (enrolling) return true;
@@ -367,7 +415,7 @@ static void finishEnroll(const char* state) {
     unlock();
 }
 
-static void enroll(FaceRecognition112V1S8& rec, Img& m, std::list<dl::detect::result_t>& found) {
+static void enroll(HumanFaceFeat& feat, Img& m, std::list<dl::detect::result_t>& found) {
     if (millis() - enrollAt > ENROLL_TIMEOUT_MS) return finishEnroll("timeout");
     lock();
     int slot = -1;
@@ -388,35 +436,53 @@ static void enroll(FaceRecognition112V1S8& rec, Img& m, std::list<dl::detect::re
     }
 
     auto& f = found.front();
-    dl::Tensor<uint8_t> img;
-    img.set_element(m.px, false).set_shape({m.h, m.w, 3});
-    int id = rec.enroll_id(img, f.keypoint, name.c_str(), false);
-    dl::Tensor<float>& emb = rec.get_face_emb(id);
-    if (id < 0 || emb.get_size() != EMB) {
-        log_e("faces: enroll failed (id %d, size %d)", id, emb.get_size());
-        if (id >= 0) rec.delete_id(id, false);
-        return finishEnroll("error");
-    }
     Record& r = slots[slot];
     memset(&r, 0, sizeof(r));
+    if (!embed(feat, m, f, r.emb)) {
+        log_e("faces: enroll failed");
+        return finishEnroll("error");
+    }
     r.uid = esp_random() | 1;
     strlcpy(r.name, name.c_str(), sizeof(r.name));
-    memcpy(r.emb, emb.get_element_ptr(), EMB * sizeof(float));
     r.jpgLen = thumbnail(m, f.box, r.jpg);
     lock();
     used[slot] = true;
-    libId[slot] = id;
     unlock();
     save();
     log_i("faces: remembered %s", r.name);
     finishEnroll("done");
 }
 
+// Set while the models load. Still set after a crash means they crashed the
+// camera: that boot goes on without face recognition instead of looping.
+static const uint32_t LOADING = 0x4C4F4144;  // "LOAD"
+RTC_NOINIT_ATTR static uint32_t loadingMark;
+
 static void task(void*) {
-    auto* s1 = new HumanFaceDetectMSR01(0.1F, 0.5F, 10, 0.2F);
-    auto* s2 = new HumanFaceDetectMNP01(0.5F, 0.3F, 5);
-    auto* rec = new FaceRecognition112V1S8();
-    restore(*rec);
+    if (loadingMark == LOADING && esp_reset_reason() == ESP_RST_PANIC) {
+        loadingMark = 0;
+        log_e("faces: the models crashed the last start, off until the next one");
+        part = nullptr;  // available() false: the pages show it as missing
+        vTaskDelete(nullptr);
+    }
+    loadingMark = LOADING;
+    // esp-dl allocates with heap_caps_*(MALLOC_CAP_DEFAULT), internal RAM
+    // first: the models took ~60 KB of it, which Wi-Fi needs. While they load,
+    // internal RAM is held down to RESERVE so they fall through to PSRAM.
+    static const size_t RESERVE = 24 * 1024, CHUNK = 4096;
+    std::vector<void*> held;
+    while (heap_caps_get_free_size(MALLOC_CAP_INTERNAL) > RESERVE + CHUNK) {
+        void* p = heap_caps_malloc(CHUNK, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        if (!p) break;
+        held.push_back(p);
+    }
+    heap_caps_malloc_extmem_enable(16);  // and the small objects (layers, names) to PSRAM too
+    auto* det = new HumanFaceDetect(HumanFaceDetect::MSRMNP_S8_V1, false);
+    auto* feat = new HumanFaceFeat(HumanFaceFeat::MFN_S8_V1, false);
+    heap_caps_malloc_extmem_enable(PSRAM_ALLOC_MIN);
+    for (void* p : held) heap_caps_free(p);
+    restore(*det, *feat);
+    loadingMark = 0;
     loadFromCard();
 
     Img m = {};
@@ -430,17 +496,10 @@ static void task(void*) {
 
         // Changes asked for by the web pages
         lock();
-        std::vector<int> del;
-        del.swap(toDelete);
         bool doSave = saveReq;
         saveReq = false;
         unlock();
-        for (int id : del) rec->delete_id(id, false);
         if (doSave) save();
-        if (threshReq) {
-            threshReq = false;
-            rec->set_thresh(threshold());
-        }
 
         if (!wanted()) {
             if (isRunning) {
@@ -458,14 +517,8 @@ static void task(void*) {
         if (!len || !decode(m, jpg, len)) continue;
         checks = checks + 1;
 
-        std::vector<int> shape = {m.h, m.w, 3};
-        auto& candidates = s1->infer(m.px, shape);
-        auto& found = s2->infer(m.px, shape, candidates);
-
-        // Biggest faces first: they are the closest and the most recognisable
-        found.sort([](const dl::detect::result_t& a, const dl::detect::result_t& b) {
-            return (a.box[2] - a.box[0]) > (b.box[2] - b.box[0]);
-        });
+        auto& found = det->run(view(m));
+        sortBySize(found);
         if (!found.empty()) checksWithFaces = checksWithFaces + 1;
         std::vector<Seen> seen;
         for (auto& f : found) {
@@ -483,27 +536,26 @@ static void task(void*) {
             liveFaces = seen;
             liveAt = millis();
             unlock();
-            enroll(*rec, m, found);
+            enroll(*feat, m, found);
             continue;
         }
 
-        dl::Tensor<uint8_t> img;
-        img.set_element(m.px, false).set_shape({m.h, m.w, 3});
-        bool anyPeople = rec->get_enrolled_id_num() > 0;
+        bool anyPeople = false;
+        lock();
+        for (int k = 0; k < MAX_PEOPLE; k++) anyPeople = anyPeople || used[k];
+        unlock();
+        static float emb[EMB];
         int i = 0;
         for (auto& f : found) {
             Seen& s = seen[i++];
-            if (anyPeople && i <= MAX_FACES && f.keypoint.size() >= 10) {
-                face_info_t r = rec->recognize(img, f.keypoint);
-                if (r.id >= 0) {
-                    lock();
-                    for (int k = 0; k < MAX_PEOPLE; k++)
-                        if (used[k] && libId[k] == r.id) {
-                            s.name = slots[k].name;
-                            s.known = true;
-                        }
-                    unlock();
+            if (anyPeople && i <= MAX_FACES && embed(*feat, m, f, emb)) {
+                lock();
+                int k = match(emb);
+                if (k >= 0) {
+                    s.name = slots[k].name;
+                    s.known = true;
                 }
+                unlock();
             }
         }
         lock();
@@ -558,7 +610,7 @@ void begin() {
 
 bool available() { return part != nullptr; }
 bool running() { return isRunning; }
-void applySettings() { threshReq = true; }
+void applySettings() {}  // the accuracy is read for every face
 uint32_t eventSeq() { return nextSeq; }
 
 void startEnroll(const String& name) {
@@ -583,7 +635,6 @@ bool forget(uint32_t uid) {
     for (int i = 0; i < MAX_PEOPLE; i++)
         if (used[i] && slots[i].uid == uid) {
             used[i] = false;
-            toDelete.push_back(libId[i]);
             found = true;
         }
     if (found) saveReq = true;
@@ -597,7 +648,6 @@ void forgetAll() {
     for (int i = 0; i < MAX_PEOPLE; i++)
         if (used[i]) {
             used[i] = false;
-            toDelete.push_back(libId[i]);
             saveReq = true;
         }
     for (int k = 0; k < evCount; k++) {
@@ -606,7 +656,7 @@ void forgetAll() {
     }
     memset(events, 0, sizeof(Event) * MAX_EVENTS);
     evHead = evCount = 0;
-    nextSeq++;
+    nextSeq = nextSeq + 1;
     unlock();
     if (!store::mounted()) return;
     for (auto& p : drop) store::fs().remove(p);

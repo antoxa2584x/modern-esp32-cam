@@ -4,6 +4,7 @@
 #include <ESPmDNS.h>
 #include <Preferences.h>
 #include <WiFi.h>
+#include <esp_mac.h>
 #include <esp_system.h>
 #include <time.h>
 
@@ -88,8 +89,9 @@ static void checkTripleReset() {
 }
 
 void begin() {
+    // From the eFuse: Arduino 3's WiFi.macAddress() is all zeros until Wi-Fi starts
     uint8_t mac[6];
-    WiFi.macAddress(mac);
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
     char suffix[8];
     snprintf(suffix, sizeof(suffix), "%02x%02x", mac[4], mac[5]);
     apName = String("ESP32-Camera-") + suffix;
