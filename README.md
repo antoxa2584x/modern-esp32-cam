@@ -29,11 +29,11 @@ no port forwarding.**
 - ♻️ **Never runs out of space** — the oldest recordings are removed when the card fills up (keeps 5 % of the card, at least 100 MB, free).
 - 📶 **Zero-config setup** — the camera opens its own Wi-Fi `ESP32-Camera-XXXX`; the setup wizard pops up on most phones and walks you through Wi-Fi and login.
 - 🌍 **Remote access** — through your own tiny relay server over TLS. Nothing to open on your home router.
-- 🔐 **Secure by default** — salted PBKDF2 passwords, persistent sessions, lockout after repeated wrong passwords, hardened relay.
+- 🔐 **Secure by default** — salted PBKDF2 passwords, hashed session tokens, lockout per address (strangers can't lock you out), the password asked again for risky changes, live video that stops on logout, protection against DNS rebinding, and a hardened relay that only serves signed camera pages.
 - 🎛️ **Full sensor control** — resolution, quality, brightness/contrast/saturation, mirror/flip/rotate, plus the sensor controls (white balance, exposure, gain, pixel/lens correction). OV2640 and OV3660 (up to 2048×1536) are detected automatically.
 - 🎨 **Six colour schemes** — purple, emerald, ocean, amber, graphite and light, stored on the camera.
 - 🌐 **English & Ukrainian** — switchable per browser.
-- ⬆️ **OTA updates** — flash new firmware straight from the browser.
+- ⬆️ **OTA updates** — flash new firmware straight from the browser (after typing the password again).
 
 ## 📸 Screenshots
 
@@ -131,12 +131,16 @@ the first flash must be over USB; browser updates keep the partition table they 
 are in `src/board.h`. For the classic ESP32-CAM add `-e esp32cam` (e.g. `pio run -e esp32cam -t upload`).
 
 Later updates can be done from the browser: **Settings → Device → Firmware**, choosing
-`.pio/build/esp32s3cam/firmware.bin`. Live video pauses while the file uploads.
+`.pio/build/esp32s3cam/firmware.bin`. The camera asks for the password first (the confirmation
+lasts 10 minutes); live video pauses while the file uploads. If you use a relay that checks page
+signatures, build with your `UI_SIGN_KEY` set (step 3), or the remote link shows "Unknown firmware"
+for that build (at home it works either way).
 
 **Releases:** set `FW_VERSION` in `platformio.ini`, commit, then push a matching tag
 (`git tag v1.0.1 && git push origin v1.0.1`). GitHub Actions builds both boards and publishes
 a release with `*-update.bin` (for the browser update) and `*-full.bin` (first flash over USB
-at address 0x0). Released firmware has no relay baked in.
+at address 0x0). Released firmware has no relay baked in; its pages are signed with the
+repository secret `UI_SIGN_KEY` (Settings → Secrets and variables → Actions), unsigned without it.
 
 ### 2. First setup
 
@@ -144,6 +148,8 @@ at address 0x0). Released firmware has no relay baked in.
 2. Connect with your phone — the setup page usually pops up by itself.
 3. Pick your home Wi-Fi and create a login.
 4. The wizard shows the camera's address: `http://192.168.x.x/` or `http://camera-xxxx.local/`.
+5. Write down the password of the camera's own network from **Settings → Wi-Fi**. From now on
+   `ESP32-Camera-XXXX` only comes back when the home Wi-Fi is gone, and then it needs that password.
 
 ### 3. Optional: preset your relay server
 
@@ -262,8 +268,10 @@ node dev/mock-camera.js            # http://localhost:8080, login admin / 123456
 SETUP=1 node dev/mock-camera.js    # start in the first-setup wizard
 ```
 
-End-to-end remote access locally: run the relay (`cd relay && npm install && npm start`), start
-the mock with `RELAY=ws://127.0.0.1:3040`, and open `http://127.0.0.1:3040/cam/k3v9x2m7qa/`.
+End-to-end remote access locally: run the relay (`cd relay && npm install && npm start`, without
+`UI_SIGN_KEY`: the mock's pages aren't signed), start the mock with `RELAY=ws://127.0.0.1:3040`,
+and open `http://127.0.0.1:3040/cam/k3v9x2m7qa/`. The mock asks for the password again like the
+camera (Wi-Fi and remote-access changes).
 
 Translations live in `web/i18n.js`, keyed by the Ukrainian source text.
 
@@ -301,13 +309,13 @@ over https (the relay), real-time `MediaRecorder` on the plain-http home network
 | `src/recorder.*`, `src/avi.*` | clip recording (pre-roll ring in PSRAM), AVI writer/reader, crash recovery |
 | `src/faces.*` | face detection + recognition on the S3 (esp-dl, JPEGDEC for decoding), remembered faces, sightings log |
 | `src/storage.*` | SD card, listing, auto-cleanup |
-| `src/netmgr.*` | Wi-Fi, setup AP + captive portal, mDNS, NTP, triple-reset recovery |
-| `src/auth.*` | user and sessions |
+| `src/netmgr.*` | Wi-Fi, setup AP + captive portal (WPA2 once set up), mDNS, NTP, triple-reset recovery, own-host-name check |
+| `src/auth.*` | user, sessions (stored hashed), login history, lockout per address, password confirmation |
 | `src/webserver.*` | UI and JSON API on port 80 |
 | `src/streamsrv.*` | live video on port 81 (`/stream`, `/snapshot`) |
 | `src/remote.*` | tunnel client to the relay |
-| `web/` | the UI (plain HTML/CSS/JS, no build step) |
-| `relay/` | relay server for remote access (Node, `ws`) |
+| `web/` | the UI (plain HTML/CSS/JS, no build step; `scripts/embed_web.py` gzips and signs it into the firmware) |
+| `relay/` | relay server for remote access (Node, `ws`); `relay/test/security.js` checks it |
 | `dev/mock-camera.js` | fake camera for UI work without hardware (`FACES=1` for the S3 face features) |
 | `demo/demo.js` | in-browser camera for the single-file demo |
 | `docs/screenshots/` | images used in this README |
