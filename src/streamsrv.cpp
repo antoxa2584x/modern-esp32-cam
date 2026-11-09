@@ -174,7 +174,7 @@ static void serve(int fd) {
 
     if (!req.startsWith("GET ")) {
         reply(fd, "405 Method Not Allowed", "");
-    } else if (auth::configured() && !auth::valid(cookieValue(req, "sid"))) {
+    } else if (!auth::valid(cookieValue(req, "sid"))) {
         reply(fd, "401 Unauthorized", "login required");
     } else if (paused()) {
         reply(fd, "503 Service Unavailable", "updating");

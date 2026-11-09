@@ -253,22 +253,31 @@ static void fillStatus(JsonObject o) {
 
 static void routesAuth() {
     get("/api/state", PUBLIC, [](AsyncWebServerRequest* r) {
+        // Before login this tells only what the login page or the setup
+        // wizard needs; strangers on the internet learn nothing about the camera
+        bool in = authed(r), relay = viaRelay(r), setup = setupOpen() && !relay;
         JsonDocument d;
         d["configured"] = auth::configured();
-        d["wifi"] = config::wifiSsid().length() > 0;
-        d["setup"] = setupOpen() && !viaRelay(r);
-        d["recovery"] = net::recoveryMode();
-        d["authed"] = authed(r);
-        d["name"] = config::s.name;
-        d["ap"] = net::apActive();
-        d["apSsid"] = net::apSsid();
-        d["streamPort"] = streamsrv::PORT;
+        d["setup"] = setup;
+        d["authed"] = in;
         d["theme"] = config::s.theme;
-        d["fw"] = FW_VERSION;
-        d["lamp"] = HAS_LAMP;
-        d["statusLed"] = STATUS_LED_PIN >= 0;
-        d["faces"] = (bool)HAS_FACES;
-        if (d["authed"]) d["user"] = auth::user();
+        if (in || !relay) {
+            d["name"] = config::s.name;
+            d["apSsid"] = net::apSsid();  // the login page's "forgot password" hint
+        }
+        if (in || setup) {
+            d["wifi"] = config::wifiSsid().length() > 0;
+            d["recovery"] = net::recoveryMode();
+            d["ap"] = net::apActive();
+        }
+        if (in) {
+            d["user"] = auth::user();
+            d["streamPort"] = streamsrv::PORT;
+            d["fw"] = FW_VERSION;
+            d["lamp"] = HAS_LAMP;
+            d["statusLed"] = STATUS_LED_PIN >= 0;
+            d["faces"] = (bool)HAS_FACES;
+        }
         sendJson(r, d);
     });
 
@@ -346,7 +355,7 @@ static void routesAuth() {
     });
 
     get("/api/setup/status", PUBLIC, [](AsyncWebServerRequest* r) {
-        if ((!net::apActive() || viaRelay(r)) && !authed(r)) return sendError(r, 401, "auth");
+        if (!authed(r) && (!setupOpen() || viaRelay(r))) return sendError(r, 401, "auth");
         JsonDocument d;
         d["state"] = net::connectState();
         d["ip"] = net::ip();
@@ -484,6 +493,9 @@ static void routesCamera() {
             if (index == 0) {
                 // Stop writing to the card while flashing
                 rec::setManual(false);
+                // An upload that was cut off midway (e.g. by Cloudflare's 100 s
+                // limit) left its update open: this one would be appended to it
+                if (Update.isRunning()) Update.abort();
                 // Update's 4 KB flash-write buffer must be in internal RAM: the
                 // flash can't be written from PSRAM ("file is damaged")
                 if (psramFound()) heap_caps_malloc_extmem_enable(8192);

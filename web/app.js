@@ -738,9 +738,9 @@ function loginPage(app) {
         h('h1', { text: info.name || t('Камера') }),
         h('p', { class: 'lead', text: t('Увійдіть, щоб побачити камеру') }),
         form,
-        h('details', { class: 'adv' },
+        h('details', { class: 'fold' },
             h('summary', null, icon('chevron', 'sm'), t('Забули пароль?')),
-            h('p', { class: 'muted small', text: t('Натисніть кнопку RST на камері тричі поспіль, з паузою приблизно в секунду. Камера увімкне власну мережу Wi-Fi «{x}». Підключіться до неї та задайте новий пароль. Записи при цьому збережуться.', { x: info.apSsid }) })))));
+            h('p', { class: 'muted small', text: t('Натисніть кнопку RST на камері тричі поспіль, з паузою приблизно в секунду. Камера увімкне власну мережу Wi-Fi «{x}». Підключіться до неї та задайте новий пароль. Записи при цьому збережуться.', { x: info.apSsid || 'ESP32-Camera-…' }) })))));
     (user.value ? pw.input : user).focus();
 }
 
@@ -2218,7 +2218,7 @@ function settingsPage() {
         toggle(t('Віддзеркалити'), t('Поміняти ліву та праву сторони'), () => S.camera.hmirror, v => cam('hmirror', v)),
         toggle(t('Перевернути'), t('Якщо камера висить догори дриґом'), () => S.camera.vflip, v => cam('vflip', v)),
         seg(t('Поворот на екрані'), null, [[0, '0°'], [90, '90°'], [180, '180°'], [270, '270°']], () => S.camera.rotate, v => cam('rotate', v)),
-        h('details', { class: 'adv' },
+        h('details', { class: 'fold' },
             h('summary', null, icon('chevron', 'sm'), t('Додаткові налаштування камери')),
             select(t('Ефект'), null, [[0, t('Без ефекту')], [1, t('Негатив')], [2, t('Чорно-білий')], [3, t('Червоний відтінок')], [4, t('Зелений відтінок')], [5, t('Синій відтінок')], [6, t('Сепія')]],
                 () => S.camera.special, v => cam('special', v)),
@@ -2315,7 +2315,7 @@ function settingsPage() {
                 }
             }, t('Зберегти')))),
         linkBox,
-        h('details', { class: 'adv' },
+        h('details', { class: 'fold' },
             h('summary', null, icon('chevron', 'sm'), t('Додатково')),
             toggle(t('Захищене з\'єднання (HTTPS)'), t('Не вимикайте: без нього відео та паролі йдуть інтернетом відкрито'), () => S.remote.tls, v => ({ remote: { tls: v } })),
             toggle(t('Не перевіряти сертифікат сервера'), t('Небезпечно: лише для власного сертифіката'), () => S.remote.insecure, v => ({ remote: { insecure: v } }), () => S.remote.tls),
@@ -2334,7 +2334,7 @@ function settingsPage() {
     const newPw2 = passwordInput({ autocomplete: 'new-password' });
     const accErr = h('div', { class: 'form-error hidden', role: 'alert' });
     const accountCard = card('user', t('Обліковий запис'),
-        h('details', { class: 'adv', style: { borderTop: 0, marginTop: 0 } },
+        h('details', { class: 'fold', style: { borderTop: 0, marginTop: 0 } },
             h('summary', { style: { paddingTop: '0' } }, icon('chevron', 'sm'), t('Змінити ім\'я або пароль')),
             h('form', {
                 class: 'stack', style: { paddingTop: '10px' }, onsubmit: async e => {

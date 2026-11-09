@@ -836,8 +836,9 @@ main.content {
 .set-row.col { flex-direction: column; align-items: stretch; gap: 10px; }
 .set-row select { width: auto; min-width: 140px; max-width: 55%; }
 .set-row.col select { max-width: none; width: 100%; }
-details.adv { border-top: 1px solid var(--line); margin-top: 6px; }
-details.adv summary {
+/* Not "adv": ad blockers hide that class */
+details.fold { border-top: 1px solid var(--line); margin-top: 6px; }
+details.fold summary {
     list-style: none;
     cursor: pointer;
     display: flex;
@@ -847,9 +848,9 @@ details.adv summary {
     font-weight: 600;
     color: var(--bright);
 }
-details.adv summary::-webkit-details-marker { display: none; }
-details.adv summary svg { transition: transform 0.2s; }
-details.adv[open] summary svg { transform: rotate(90deg); }
+details.fold summary::-webkit-details-marker { display: none; }
+details.fold summary svg { transition: transform 0.2s; }
+details.fold[open] summary svg { transform: rotate(90deg); }
 .preview { position: relative; border-radius: 14px; overflow: hidden; background: #120a24; aspect-ratio: 4 / 3; margin-bottom: 8px; }
 .preview img { position: absolute; left: 50%; top: 50%; width: 100%; height: 100%; object-fit: contain; transform: translate(-50%, -50%); }
 .lang-switch {
