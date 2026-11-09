@@ -10,6 +10,7 @@ no port forwarding.**
 
 ![Platform](https://img.shields.io/badge/platform-ESP32--S3-7c5cbf)
 ![Framework](https://img.shields.io/badge/built%20with-PlatformIO-f5822a)
+![Arduino](https://img.shields.io/badge/Arduino--ESP32-3.3-00979d)
 ![UI](https://img.shields.io/badge/UI-vanilla%20JS-f7df1e)
 ![Languages](https://img.shields.io/badge/languages-EN%20%7C%20UK-0057b7)
 ![Relay](https://img.shields.io/badge/relay-Node.js-3c873a)
@@ -118,9 +119,11 @@ no port forwarding.**
 
 ### 1. Build & flash
 
-Requires [PlatformIO](https://platformio.org/). The firmware uses Arduino-ESP32 3.3 through the
+Requires [PlatformIO](https://platformio.org/) Core 6.2.0 or newer (`pip install -U platformio`).
+The firmware uses Arduino-ESP32 3.3 through the
 [pioarduino](https://github.com/pioarduino/platform-espressif32) platform, which `platformio.ini`
-downloads by itself. The ESP-IDF components its precompiled libraries lack are in `lib/`: the
+downloads by itself. (pioarduino's own core, `6.2.0.post1`, counts as older than 6.2.0 and is
+refused by its platform: use the PyPI one.) The ESP-IDF components its precompiled libraries lack are in `lib/`: the
 WebSocket client and the face models (repacked with `scripts/pack_espdl.py`).
 
 ```bash
@@ -132,7 +135,10 @@ pio device monitor         # serial log, 115200 baud
 The partition table (`partitions_16mb.csv`) has a `faces` partition for remembered faces, so
 the first flash must be over USB; browser updates keep the partition table they find. Its app
 slots grew from 4 to 6 MB with Arduino 3, so an S3 camera on firmware 1.3.0 or older needs one
-more USB flash (the browser refuses the bigger file; remembered faces are lost). Pin maps
+more USB flash (the browser refuses the bigger file; remembered faces are lost): write the
+release's `esp32-s3-cam-<version>-full.bin` at 0x0. That also clears the settings (Wi-Fi,
+login), so the camera starts the setup again; recordings on the card stay. To keep the settings,
+flash from source instead (`pio run -t upload` writes only the bootloader, partition table and app). Pin maps
 are in `src/board.h`. For the classic ESP32-CAM add `-e esp32cam` (e.g. `pio run -e esp32cam -t upload`).
 
 Later updates can be done from the browser: **Settings → Device → Firmware**, choosing
@@ -142,7 +148,7 @@ signatures, build with your `UI_SIGN_KEY` set (step 3), or the remote link shows
 for that build (at home it works either way).
 
 **Releases:** set `FW_VERSION` in `platformio.ini`, commit, then push a matching tag
-(`git tag v1.0.1 && git push origin v1.0.1`). GitHub Actions builds both boards and publishes
+(`git tag v2.0.1 && git push origin v2.0.1`). GitHub Actions builds both boards and publishes
 a release with `*-update.bin` (for the browser update) and `*-full.bin` (first flash over USB
 at address 0x0). Released firmware has no relay baked in; its pages are signed with the
 repository secret `UI_SIGN_KEY` (Settings → Secrets and variables → Actions), unsigned without it.
@@ -315,6 +321,8 @@ over https (the relay), real-time `MediaRecorder` on the plain-http home network
 | `src/motion.*` | motion detector: 16×12 brightness grid vs. adaptive background |
 | `src/recorder.*`, `src/avi.*` | clip recording (pre-roll ring in PSRAM), AVI writer/reader, crash recovery |
 | `src/faces.*` | face detection + recognition on the S3 (esp-dl, JPEGDEC for decoding), remembered faces, sightings log |
+| `lib/human_face/` | Espressif's face detect/recognition components and their models (esp-dl 3), vendored |
+| `lib/esp_websocket_client/` | ESP-IDF WebSocket client used by `src/remote.*`, vendored (not in Arduino 3's libraries) |
 | `src/storage.*` | SD card, listing, auto-cleanup |
 | `src/netmgr.*` | Wi-Fi, setup AP + captive portal (WPA2 once set up), mDNS, NTP, triple-reset recovery, own-host-name check |
 | `src/auth.*` | user, sessions (stored hashed), login history, lockout per address, password confirmation |
