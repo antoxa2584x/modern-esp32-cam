@@ -25,6 +25,7 @@
 namespace web {
 static AsyncWebServer server(80);
 static uint32_t rebootAt = 0;
+static AsyncWebServerRequest* otaRequest = nullptr;  // the firmware upload allowed to write
 static const size_t MAX_BODY = 4096;
 
 // ---------- helpers ----------
@@ -71,9 +72,15 @@ static bool authed(AsyncWebServerRequest* r) {
     return auth::valid(cookie(r, "sid"), &c);
 }
 
-// The setup wizard may run without a login until a user exists, and in
-// recovery mode (RST pressed three times)
-static bool setupOpen() { return !auth::configured() || net::recoveryMode(); }
+// The setup wizard may run without a login until a user exists (from home or
+// the camera's own Wi-Fi), and in recovery mode (RST pressed three times; only
+// from the camera's own Wi-Fi, so only someone standing near the camera).
+// Never through the relay.
+static bool setupOpen(AsyncWebServerRequest* r) {
+    if (viaRelay(r) || !r->client()) return false;
+    if (!auth::configured()) return true;
+    return net::recoveryMode() && net::fromAp(r->client()->remoteIP());
+}
 
 // Blocks cross-site form posts: browsers can't add this header without CORS
 static bool sameSite(AsyncWebServerRequest* r) {
@@ -102,6 +109,14 @@ static void sendOk(AsyncWebServerRequest* r) {
     sendJson(r, d);
 }
 
+// Risky changes need the password typed again within the last 10 minutes
+// (POST /api/confirm). Sends the answer that asks for it if not.
+static bool confirmedOrAsk(AsyncWebServerRequest* r) {
+    if (auth::confirmed(cookie(r, "sid"))) return true;
+    sendError(r, 403, "confirm", "Підтвердіть паролем");
+    return false;
+}
+
 static void setSessionCookie(AsyncWebServerResponse* res, const String& token) {
     String c = "sid=" + token + "; Path=/; HttpOnly; SameSite=Strict";
     c += token.length() ? "; Max-Age=2592000" : "; Max-Age=0";
@@ -114,7 +129,7 @@ static bool allowed(AsyncWebServerRequest* r, Access a) {
     if (a == PUBLIC) return true;
     if (authed(r)) return true;
     // Login-free setup never works through the relay
-    if (a == SETUP && setupOpen() && !viaRelay(r)) return true;
+    if (a == SETUP && setupOpen(r)) return true;
     sendError(r, 401, "auth");
     return false;
 }
@@ -255,7 +270,7 @@ static void routesAuth() {
     get("/api/state", PUBLIC, [](AsyncWebServerRequest* r) {
         // Before login this tells only what the login page or the setup
         // wizard needs; strangers on the internet learn nothing about the camera
-        bool in = authed(r), relay = viaRelay(r), setup = setupOpen() && !relay;
+        bool in = authed(r), relay = viaRelay(r), setup = setupOpen(r);
         JsonDocument d;
         d["configured"] = auth::configured();
         d["setup"] = setup;
@@ -268,6 +283,7 @@ static void routesAuth() {
         if (in || setup) {
             d["wifi"] = config::wifiSsid().length() > 0;
             d["recovery"] = net::recoveryMode();
+            d["recoveryLeft"] = net::recoverySecondsLeft();
             d["ap"] = net::apActive();
         }
         if (in) {
@@ -282,12 +298,13 @@ static void routesAuth() {
     });
 
     postJson("/api/login", PUBLIC, [](AsyncWebServerRequest* r, JsonObjectConst b) {
-        bool locked = false, remote = viaRelay(r);
-        String tok = auth::login(b["user"] | "", b["password"] | "", clientOf(r), locked);
+        bool locked = false;
+        auth::Client c = clientOf(r);
+        String tok = auth::login(b["user"] | "", b["password"] | "", c, locked);
         if (!tok.length()) {
             JsonDocument d;
             d["error"] = locked ? "locked" : "wrong";
-            d["wait"] = auth::lockoutSeconds(remote);
+            d["wait"] = auth::lockoutSeconds(c);
             return sendJson(r, d, locked ? 429 : 403);
         }
         JsonDocument d;
@@ -325,6 +342,26 @@ static void routesAuth() {
         sendJson(r, d);
     });
 
+    // The password again before risky changes; good for 10 minutes
+    postJson("/api/confirm", USER, [](AsyncWebServerRequest* r, JsonObjectConst b) {
+        bool locked = false;
+        auth::Client c = clientOf(r);
+        if (!auth::checkPassword(b["password"] | "", c, locked)) {
+            JsonDocument d;
+            d["error"] = locked ? "locked" : "wrong";
+            d["wait"] = auth::lockoutSeconds(c);
+            return sendJson(r, d, locked ? 429 : 403);
+        }
+        auth::confirm(cookie(r, "sid"));
+        sendOk(r);
+    });
+
+    get("/api/confirm", USER, [](AsyncWebServerRequest* r) {
+        JsonDocument d;
+        d["left"] = auth::confirmedSeconds(cookie(r, "sid"));
+        sendJson(r, d);
+    });
+
     // First setup / recovery: Wi-Fi and the login in one go
     postJson("/api/setup", SETUP, [](AsyncWebServerRequest* r, JsonObjectConst b) {
         String user = b["user"] | "";
@@ -342,6 +379,21 @@ static void routesAuth() {
 
         String tok;
         if (needUser) {
+            // Recovery is for someone who no longer knows the password, and
+            // that may be a stranger: what the old owner set up goes. The
+            // recordings stay (the card can be read without the camera anyway).
+            if (net::recoveryMode()) {
+                auth::wipe();
+                faces::forgetAll();
+                config::lock();
+                config::s.remoteEnabled = false;
+                config::s.remoteId = config::randomToken(10);
+                config::s.remoteKey = config::randomToken(32);
+                config::unlock();
+                config::newApPassword();
+                config::save();
+                remote::restart();
+            }
             auth::setCredentials(user, pass);
             auth::logoutAll();
             tok = auth::newSession(clientOf(r));
@@ -355,7 +407,7 @@ static void routesAuth() {
     });
 
     get("/api/setup/status", PUBLIC, [](AsyncWebServerRequest* r) {
-        if (!authed(r) && (!setupOpen() || viaRelay(r))) return sendError(r, 401, "auth");
+        if (!authed(r) && !setupOpen(r)) return sendError(r, 401, "auth");
         JsonDocument d;
         d["state"] = net::connectState();
         d["ip"] = net::ip();
@@ -379,12 +431,16 @@ static void routesAuth() {
     postJson("/api/wifi", USER, [](AsyncWebServerRequest* r, JsonObjectConst b) {
         String ssid = b["ssid"] | "";
         if (!ssid.length()) return sendError(r, 400, "ssid", "Оберіть мережу Wi-Fi");
+        if (!confirmedOrAsk(r)) return;
         net::connect(ssid, b["password"] | "", true);
         sendOk(r);
     });
 
     postJson("/api/account", USER, [](AsyncWebServerRequest* r, JsonObjectConst b) {
-        if (!auth::checkPassword(b["current"] | "")) return sendError(r, 403, "current", "Поточний пароль невірний");
+        bool locked = false;
+        if (!auth::checkPassword(b["current"] | "", clientOf(r), locked))
+            return sendError(r, locked ? 429 : 403, "current",
+                             locked ? "Забагато невдалих спроб, спробуйте пізніше" : "Поточний пароль невірний");
         String user = b["user"] | "";
         String pass = b["password"] | "";
         user.trim();
@@ -439,13 +495,32 @@ static void routesCamera() {
     get("/api/settings", USER, [](AsyncWebServerRequest* r) {
         JsonDocument d;
         config::toJson(d.to<JsonObject>(), false);
+        d["apSsid"] = net::apSsid();
+        d["apPassword"] = config::apPassword();
         d["sensor"] = cam::sensor();
         d["maxFramesize"] = cam::maxFramesize();
         sendJson(r, d);
     });
 
     postJson("/api/settings", USER, [](AsyncWebServerRequest* r, JsonObjectConst b) {
+        // Remote access opens the camera to the internet and decides where
+        // its traffic goes: changing it needs the password
+        config::lock();
+        Settings before = config::s;
+        config::unlock();
         uint32_t ch = config::fromJson(b);
+        if ((ch & config::CH_REMOTE) && !auth::confirmed(cookie(r, "sid"))) {
+            config::lock();
+            config::s.remoteEnabled = before.remoteEnabled;
+            config::s.remoteHost = before.remoteHost;
+            config::s.remoteToken = before.remoteToken;
+            config::s.remoteTls = before.remoteTls;
+            config::s.remoteInsecure = before.remoteInsecure;
+            config::unlock();
+            ch &= ~config::CH_REMOTE;
+            if (ch) config::save();
+            return sendError(r, 403, "confirm", "Підтвердіть паролем");
+        }
         if (ch & config::CH_CAMERA) {
             cam::apply(config::s.cam);
             motion::reset();
@@ -479,8 +554,11 @@ static void routesCamera() {
     server.on(
         "/api/update", HTTP_POST,
         [](AsyncWebServerRequest* r) {
+            bool mine = r == otaRequest;
+            otaRequest = nullptr;
             if (!sameSite(r) || !authed(r)) return sendError(r, 401, "auth");
-            if (Update.hasError() || !Update.isFinished()) {
+            if (!confirmedOrAsk(r)) return;
+            if (!mine || Update.hasError() || !Update.isFinished()) {
                 Update.abort();
                 streamsrv::pause(false);
                 return sendError(r, 400, "update", "Файл не підходить або пошкоджений");
@@ -489,7 +567,13 @@ static void routesCamera() {
             sendOk(r);
         },
         [](AsyncWebServerRequest* r, const String&, size_t index, uint8_t* data, size_t len, bool final) {
-            if (!sameSite(r) || !authed(r)) return;
+            if (index == 0) {
+                // Checked once, at the start of the upload: a firmware needs
+                // the password typed again, not only a login
+                if (!sameSite(r) || !authed(r) || !auth::confirmed(cookie(r, "sid"))) return;
+                otaRequest = r;
+            }
+            if (r != otaRequest) return;
             if (index == 0) {
                 // Stop writing to the card while flashing
                 rec::setManual(false);
@@ -588,6 +672,7 @@ static void routesRecordings() {
     // Runs in the background; progress shows in /api/status (sd.clearing)
     postJson("/api/rec/clear", USER, [](AsyncWebServerRequest* r, JsonObjectConst) {
         if (!store::mounted()) return sendError(r, 409, "nosd", "Вставте карту пам'яті microSD");
+        if (!confirmedOrAsk(r)) return;
         store::startClear();
         JsonDocument d;
         d["queued"] = true;
@@ -658,6 +743,7 @@ static void routesStatic() {
             res->addHeader("Content-Encoding", "gzip");
             res->addHeader("ETag", WEB_ETAG);
             res->addHeader("Cache-Control", "no-cache");
+            if (a->sig[0]) res->addHeader("X-UI-Sig", a->sig);  // checked by the relay (scripts/embed_web.py)
             r->send(res);
         };
         if (strcmp(a->path, "/index.html") == 0) server.on("/", HTTP_GET, handler);
@@ -665,27 +751,37 @@ static void routesStatic() {
     }
 
     server.onNotFound([](AsyncWebServerRequest* r) {
-        // Captive portal: phones probing for internet land on the setup page
-        if (net::apActive()) {
-            String host = r->host();
-            if (host != "192.168.4.1" && host != WiFi.localIP().toString() && !host.startsWith(net::hostname())) {
-                r->redirect("http://192.168.4.1/");
-                return;
-            }
-        }
         if (r->url().startsWith("/api/")) return sendError(r, 404, "notfound");
         r->redirect("/");
     });
 }
 
+// Every request: only to one of the camera's own names (see net::ownHost).
+// On the camera's own Wi-Fi, phones probing for the internet land on setup.
+static void hostCheck(AsyncWebServerRequest* r, ArMiddlewareNext next) {
+    if (net::ownHost(r->host(), viaRelay(r))) return next();
+    if (net::apActive() && r->client() && net::fromAp(r->client()->remoteIP())) return r->redirect("http://192.168.4.1/");
+    r->send(421, "text/plain", "Misdirected request");
+}
+
 void begin() {
     readLastCrash();
+    server.addMiddleware(hostCheck);
     routesAuth();
     routesCamera();
     routesRecordings();
     routesFaces();
     routesStatic();
     DefaultHeaders::Instance().addHeader("X-Content-Type-Options", "nosniff");
+    // As the relay sends them (it drops these and sets its own). Live video
+    // comes from port 81 of the same address.
+    DefaultHeaders::Instance().addHeader(
+        "Content-Security-Policy",
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data: http://*:81; "
+        "connect-src 'self' http://*:81; manifest-src 'self'; frame-ancestors 'none'; base-uri 'none'; "
+        "form-action 'self'; object-src 'none'");
+    DefaultHeaders::Instance().addHeader("X-Frame-Options", "DENY");
+    DefaultHeaders::Instance().addHeader("Referrer-Policy", "no-referrer");
     server.begin();
 }
 

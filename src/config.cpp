@@ -1,6 +1,7 @@
 #include "config.h"
 
 #include <Preferences.h>
+#include <bootloader_random.h>
 #include <esp_random.h>
 
 namespace config {
@@ -228,6 +229,9 @@ void begin() {
         }
     }
     bool dirty = false;
+    // Wi-Fi isn't running yet, and without it esp_random() isn't fed by the
+    // radio's noise: the remote key must not be guessable
+    bootloader_random_enable();
     if (s.remoteId.length() < 8) {
         s.remoteId = randomToken(10);
         dirty = true;
@@ -236,6 +240,8 @@ void begin() {
         s.remoteKey = randomToken(32);
         dirty = true;
     }
+    if (!apPassword().length()) newApPassword();
+    bootloader_random_disable();
     if (dirty) save();
     boots = prefs.getUInt("boots", 0) + 1;
     prefs.putUInt("boots", boots);
@@ -248,5 +254,15 @@ String wifiPass() { return prefs.getString("wpass", ""); }
 void setWifi(const String& ssid, const String& pass) {
     prefs.putString("ssid", ssid);
     prefs.putString("wpass", pass);
+}
+
+String apPassword() { return prefs.getString("appass", ""); }
+
+void newApPassword() {
+    // Easy to type on a phone: no look-alike characters (0/o, 1/l)
+    static const char abc[] = "abcdefghijkmnpqrstuvwxyz23456789";
+    String p;
+    for (int i = 0; i < 10; i++) p += abc[esp_random() % 32];
+    prefs.putString("appass", p);
 }
 }  // namespace config

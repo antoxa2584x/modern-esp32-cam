@@ -14,7 +14,10 @@ namespace net {
 static DNSServer dns;
 static bool dnsOn = false;
 static bool apOn = false;
+static bool apOpen = false;  // without a password
 static bool recovery = false;
+// Recovery lets anyone near the camera set a new login, so it doesn't wait for long
+static const uint32_t RECOVERY_MS = 15 * 60000;
 static String apName, host;
 static enum { IDLE, CONNECTING, OK, FAIL } cstate = IDLE;
 static uint32_t connectStarted = 0;
@@ -29,7 +32,12 @@ static void startAp() {
     if (apOn) return;
     WiFi.mode(WIFI_AP_STA);
     WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0));
-    WiFi.softAP(apName.c_str());  // open: the web UI still asks for the login
+    // Open for the first setup and in recovery (nobody knows a password yet);
+    // otherwise only for those who know the camera's own Wi-Fi password, so
+    // a neighbour who knocks the camera off the home network can't join it
+    String pass = config::apPassword();
+    apOpen = !auth::configured() || recovery || pass.length() < 8;
+    WiFi.softAP(apName.c_str(), apOpen ? nullptr : pass.c_str());
     dns.setErrorReplyCode(DNSReplyCode::NoError);
     dnsOn = dns.start(53, "*", IPAddress(192, 168, 4, 1));
     apOn = true;
@@ -129,6 +137,26 @@ void loop() {
         if (!recovery) rp.putUInt("n", 0);
     }
 
+    // Recovery is over: the AP opened for it gets the password, if it stays
+    if (recovery && now > RECOVERY_MS) {
+        recovery = false;
+        log_w("recovery mode ended");
+        if (apOn) stopAp();
+    }
+
+    // An AP left open after the setup or recovery: once nobody uses it, close
+    // it; it comes back with its password if the camera still needs it
+    static uint32_t openIdleSince = 0;
+    if (apOn && apOpen && auth::configured() && !recovery && WiFi.softAPgetStationNum() == 0) {
+        if (!openIdleSince) openIdleSince = now | 1;
+        if (now - openIdleSince > 120000) {
+            stopAp();
+            openIdleSince = 0;
+        }
+    } else {
+        openIdleSince = 0;
+    }
+
     bool up = WiFi.status() == WL_CONNECTED;
     if (up) {
         lastConnectedMs = now;
@@ -178,9 +206,29 @@ void loop() {
 }
 
 bool setupMode() { return config::wifiSsid().length() == 0 || !auth::configured(); }
-bool recoveryMode() { return recovery; }
+bool recoveryMode() { return recovery && millis() < RECOVERY_MS; }
+uint32_t recoverySecondsLeft() { return recoveryMode() ? (RECOVERY_MS - millis()) / 1000 : 0; }
 void endRecovery() { recovery = false; }
 bool apActive() { return apOn; }
+
+bool fromAp(const IPAddress& ip) {
+    IPAddress a = WiFi.softAPIP();
+    return apOn && ip[0] == a[0] && ip[1] == a[1] && ip[2] == a[2] && ip != a;
+}
+
+// DNS rebinding: a web page on some other site may get its name pointed at
+// the camera's address, and its scripts would then talk to the camera as if
+// they were at home. Browsers always send the name they asked for.
+bool ownHost(String host, bool viaRelay) {
+    int colon = host.lastIndexOf(':');
+    if (colon >= 0 && host.indexOf(']') < colon) host = host.substring(0, colon);
+    host.toLowerCase();
+    if (host.endsWith(".")) host.remove(host.length() - 1);
+    if (viaRelay) return host == "camera";
+    if (!host.length()) return false;
+    if (host == "192.168.4.1" || host == ::net::host || host == ::net::host + ".local") return true;
+    return staConnected() && host == WiFi.localIP().toString();
+}
 bool staConnected() { return WiFi.status() == WL_CONNECTED; }
 String apSsid() { return apName; }
 String hostname() { return host; }

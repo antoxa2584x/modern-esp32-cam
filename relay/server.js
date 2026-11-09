@@ -14,7 +14,14 @@
 // - The first camera that registers an id owns it (key stored hashed).
 // - Headers are allowlisted both ways; only the camera's own "sid" cookie
 //   passes, locked to its /cam/<id>/ path.
-// - Rate limits per client IP for camera connections and login attempts.
+// - All cameras share this origin, so a fake camera (one that got the
+//   registration code out of a real one's flash) could serve scripts that
+//   use another camera's login in the same browser. So page files (anything
+//   outside /api/, /stream, /snapshot) must carry the build's signature
+//   (UI_SIGN_KEY, see scripts/embed_web.py), and everything else is sent
+//   with a sandboxing CSP: no script from a camera runs unless it was built
+//   by us.
+// - Rate limits per client IP for camera connections and password attempts.
 //
 // Frames: [type u8][stream id u16 BE][payload]
 //   1 OPEN (payload: port u16), 2 DATA, 3 CLOSE, 4 PAUSE, 5 RESUME
@@ -22,6 +29,7 @@
 const http = require('http');
 const crypto = require('crypto');
 const fs = require('fs');
+const net = require('net');
 const path = require('path');
 const { Duplex } = require('stream');
 const { WebSocketServer } = require('ws');
@@ -36,6 +44,13 @@ if (!TOKENS.length && !ALLOW_OPEN) {
     console.error('Set RELAY_TOKEN (registration code for cameras), or ALLOW_OPEN=1 for local testing.');
     process.exit(1);
 }
+// Key the camera page files are signed with at build time. Without
+// UI_SIGN_ENFORCE=1 a missing or wrong signature is only logged (for the
+// switch-over while cameras still run unsigned firmware).
+const UI_KEY = process.env.UI_SIGN_KEY || '';
+const UI_ENFORCE = !!UI_KEY && process.env.UI_SIGN_ENFORCE === '1';
+const MAX_UI_FILE = 2 * 1024 * 1024;
+const MAX_QUEUE = 20; // requests waiting per camera
 const MAX_STREAMS = 16;
 // Requests forwarded to a camera at once; more wait in a queue. Each one costs
 // the camera two of its 16 TCP connections, and it takes 5 (src/remote.cpp):
@@ -70,8 +85,34 @@ function tokenOk(t) {
     return TOKENS.some(x => crypto.timingSafeEqual(h, Buffer.from(sha256(x), 'hex')));
 }
 
-// The origin only accepts Cloudflare's addresses, so its header is trustworthy
-const clientIp = req => req.headers['cf-connecting-ip'] || req.headers['x-real-ip'] || req.socket.remoteAddress;
+// The visitor's address. nginx (on this machine) passes the address that
+// connected to it as X-Real-IP; when that is Cloudflare, Cloudflare's header
+// names the visitor. Anyone else could send that header themselves.
+// https://www.cloudflare.com/ips/
+const CLOUDFLARE = new net.BlockList();
+for (const c of ['173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22', '103.31.4.0/22', '141.101.64.0/18',
+    '108.162.192.0/18', '190.93.240.0/20', '188.114.96.0/20', '197.234.240.0/22', '198.41.128.0/17',
+    '162.158.0.0/15', '104.16.0.0/13', '104.24.0.0/14', '172.64.0.0/13', '131.0.72.0/22']) {
+    const [a, n] = c.split('/');
+    CLOUDFLARE.addSubnet(a, +n, 'ipv4');
+}
+for (const c of ['2400:cb00::/32', '2606:4700::/32', '2803:f800::/32', '2405:b500::/32', '2405:8100::/32',
+    '2a06:98c0::/29', '2c0f:f248::/32']) {
+    const [a, n] = c.split('/');
+    CLOUDFLARE.addSubnet(a, +n, 'ipv6');
+}
+function isCloudflare(ip) {
+    ip = String(ip || '').replace(/^::ffff:/, '');
+    const type = net.isIP(ip);
+    return type ? CLOUDFLARE.check(ip, type === 4 ? 'ipv4' : 'ipv6') : false;
+}
+const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+function clientIp(req) {
+    const peer = req.socket.remoteAddress;
+    const real = LOOPBACK.has(peer) && req.headers['x-real-ip'] ? String(req.headers['x-real-ip']) : peer;
+    const cf = req.headers['cf-connecting-ip'];
+    return cf && isCloudflare(real) ? String(cf) : real;
+}
 
 // "City, Region, CC" (URL-encoded) from Cloudflare's visitor location headers (the country
 // always; city and region with the "Add visitor location headers" transform)
@@ -217,11 +258,12 @@ class Device {
         this.send(T.OPEN, sid, Buffer.from([port >> 8, port & 255]));
         return t;
     }
-    // Closes the oldest live stream that has run a while; false if none may go
-    makeRoomForLive() {
-        while (this.live >= MAX_LIVE) {
+    // Closes the oldest live streams that have run a while, so that at most
+    // MAX_LIVE are left counting `keep`; false if none may go
+    makeRoomForLive(keep) {
+        while (this.live > MAX_LIVE) {
             let oldest = null;
-            for (const t of this.streams.values()) if (t.live && (!oldest || t.openedAt < oldest.openedAt)) oldest = t;
+            for (const t of this.streams.values()) if (t.live && t !== keep && (!oldest || t.openedAt < oldest.openedAt)) oldest = t;
             if (!oldest || Date.now() - oldest.openedAt < 10000) return false;
             oldest.destroy();
         }
@@ -231,6 +273,10 @@ class Device {
     whenFree(run, fail) {
         if (this.streams.size < CAM_STREAMS && !this.queue.length) {
             run();
+            return null;
+        }
+        if (this.queue.filter(e => !e.done).length >= MAX_QUEUE) {
+            fail();
             return null;
         }
         const entry = { run, fail, done: false };
@@ -345,6 +391,8 @@ const SECURITY_HEADERS = {
     'permissions-policy': 'camera=(), microphone=(), geolocation=()',
     'cross-origin-opener-policy': 'same-origin',
 };
+// For everything that isn't a signed page file
+const SANDBOX_CSP = "sandbox; default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; frame-ancestors 'none'";
 
 // sid=<token>; ... -> sid=<token>; Path=/cam/<id>/; HttpOnly; SameSite=Strict; Secure
 function cleanCookie(c, id) {
@@ -369,6 +417,10 @@ const PAGES = {
         uk: ['Камера не відповідає', 'Камера на зв\'язку, але не відповіла вчасно. Спробуйте ще раз.'],
         en: ['The camera isn\'t answering', 'The camera is online but didn\'t answer in time. Try again.'],
     },
+    unsigned: {
+        uk: ['Невідома прошивка', 'Сторінки цієї камери не підписані нашою збіркою, тому з міркувань безпеки вони тут не відкриваються. Оновіть прошивку камери вдома (Налаштування → Пристрій).'],
+        en: ['Unknown firmware', 'This camera\'s pages are not signed by our build, so for safety they don\'t open here. Update the camera\'s firmware at home (Settings → Device).'],
+    },
     reload: { uk: ['Оновити сторінку'], en: ['Reload the page'] },
 };
 function langOf(req) {
@@ -392,6 +444,22 @@ h1{font-size:1.4rem;margin:0 0 10px}p{color:#c3b3e6;margin:0 0 20px;line-height:
     res.end(html);
 }
 
+// Page files are what a camera's web UI is made of: anything but its API and video
+const isPageFile = sub => !sub.startsWith('/api/') && sub !== '/stream' && sub !== '/snapshot';
+
+// A page file's signature: HMAC-SHA256 of "<content type>\n<body as sent>"
+function signedOk(type, body, sig) {
+    if (!UI_KEY || typeof sig !== 'string' || !/^[0-9a-f]{64}$/.test(sig)) return false;
+    const want = crypto.createHmac('sha256', UI_KEY).update(String(type || '') + '\n').update(body).digest();
+    return crypto.timingSafeEqual(want, Buffer.from(sig, 'hex'));
+}
+
+// Paths a camera page asks for are plain: no encoding tricks that the
+// camera would decode into something the checks here didn't see
+const PLAIN_PATH = /^\/(?:[A-Za-z0-9._~-]+\/?)*$/;
+// Anything that takes the password: counted per address
+const PASSWORD_PATH = /^\/api\/(?:login|confirm|account)(?:\/|$)/;
+
 function handle(req, res) {
     const m = /^\/cam\/([a-z0-9]{8,32})(\/.*)?$/.exec(req.url.split('?')[0]);
     if (!m) return page(req, res, 404, 'notfound');
@@ -402,6 +470,7 @@ function handle(req, res) {
     }
     const query = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
     const sub = m[2];
+    if (!PLAIN_PATH.test(sub) || /(^|\/)\.\.?(\/|$)/.test(sub)) return page(req, res, 404, 'notfound');
     const dev = devices.get(id);
     const isApi = sub.startsWith('/api/');
     const json = (code, obj) => {
@@ -409,7 +478,7 @@ function handle(req, res) {
         res.end(JSON.stringify(obj));
     };
     // Guessing passwords: a few tries per address, on top of the camera's own lockout
-    if (sub === '/api/login' && req.method === 'POST') {
+    if (PASSWORD_PATH.test(sub) && req.method === 'POST') {
         const wait = logins.take(clientIp(req));
         if (wait) return json(429, { error: 'locked', wait });
     }
@@ -423,23 +492,14 @@ function handle(req, res) {
         page(req, res, 503, 'busy');
     };
     const live = sub === '/stream';
-    // A viewer that went away can stay connected for a minute (Cloudflare keeps
-    // the request open), so the newest viewer takes the oldest one's place
-    if (live && !dev.makeRoomForLive()) return busy();
     const queued = dev.whenFree(forward, busy);
     if (queued) res.on('close', () => { if (!queued.done) queued.cancel(); });
 
     function forward() {
         if (res.destroyed) return;
         const port = sub === '/stream' || sub === '/snapshot' ? 81 : 80;
-        if (live && !dev.makeRoomForLive()) return busy();
         const tunnel = dev.open(port);
         if (!tunnel) return page(req, res, 503, 'busy');
-        if (live) {
-            tunnel.live = true;
-            tunnel.openedAt = Date.now();
-            dev.live++;
-        }
 
         // Only the camera's own session cookie goes to the camera
         const headers = {};
@@ -465,9 +525,59 @@ function handle(req, res) {
             const loc = pres.headers.location;
             if (loc) out.location = /^\/(?!\/)/.test(loc) ? `/cam/${id}${loc}` : `/cam/${id}/`;
             out['x-accel-buffering'] = 'no';
-            res.writeHead(pres.statusCode, out);
-            pres.pipe(res);
             pres.on('error', () => res.destroy());
+
+            if (!isPageFile(sub)) {
+                // Data, pictures, video: never a page that runs scripts here
+                out['content-security-policy'] = SANDBOX_CSP;
+                // A viewer that went away can stay connected for a minute
+                // (Cloudflare keeps the request open), so a new viewer takes
+                // the oldest one's place, but only once the camera let it in
+                if (live && pres.statusCode === 200) {
+                    tunnel.live = true;
+                    tunnel.openedAt = Date.now();
+                    dev.live++;
+                    if (!dev.makeRoomForLive(tunnel)) {
+                        tunnel.destroy();
+                        return busy();
+                    }
+                }
+                res.writeHead(pres.statusCode, out);
+                return pres.pipe(res);
+            }
+
+            // A page file: only as the build made it
+            if (pres.statusCode !== 200) {
+                // Redirects, "not modified" (the browser has the checked copy), errors: no body
+                delete out['content-type'];
+                delete out['content-length'];
+                delete out['content-encoding'];
+                out['content-security-policy'] = SANDBOX_CSP;
+                res.writeHead(pres.statusCode, out);
+                res.end();
+                return pres.resume();
+            }
+            const parts = [];
+            let size = 0;
+            pres.on('data', c => {
+                size += c.length;
+                if (size > MAX_UI_FILE) return preq.destroy(new Error('page file too big'));
+                parts.push(c);
+            });
+            pres.on('end', () => {
+                if (res.destroyed) return;
+                const body = Buffer.concat(parts);
+                if (!signedOk(pres.headers['content-type'], body, pres.headers['x-ui-sig'])) {
+                    if (UI_ENFORCE) {
+                        log('unsigned page file refused', id, sub);
+                        return page(req, res, 502, 'unsigned');
+                    }
+                    if (UI_KEY) log('unsigned page file (not enforced)', id, sub);
+                }
+                out['content-length'] = body.length;
+                res.writeHead(200, out);
+                res.end(body);
+            });
         });
         preq.on('error', err => {
             clearTimeout(firstByte);

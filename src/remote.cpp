@@ -160,6 +160,8 @@ static void onText(const char* d, int len) {
         registered = true;
         config::lock();
         publicUrl = doc["url"] | "";
+        // Shown as a link in the UI: only a web address may get there
+        if (!publicUrl.startsWith("https://") && !publicUrl.startsWith("http://")) publicUrl = "";
         config::unlock();
         setState("online");
     } else if (t == "err") {

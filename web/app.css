@@ -475,9 +475,17 @@ main.content {
 
 /* ---------- home ---------- */
 .home-grid { display: grid; gap: 16px; }
+/* Wide screens: recordings under the video, status on the side. Narrower:
+   one column, video first, then status, then recordings. */
 @media (min-width: 1100px) {
     .home-grid { grid-template-columns: minmax(0, 1fr) 360px; align-items: start; }
-    .home-side .card + .card { margin-top: 16px; }
+    .home-main .card + .card, .home-side .card + .card { margin-top: 16px; }
+    .home-main .strip { grid-template-columns: repeat(4, 1fr); }
+}
+@media (max-width: 1099px) {
+    .home-main, .home-side { display: contents; }
+    .home-side > .card { order: 1; }
+    .home-main > .card:not(.live-card) { order: 2; }
 }
 .live-card { padding: 0; overflow: hidden; }
 .live {

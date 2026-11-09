@@ -9,6 +9,8 @@ ExecStart=/usr/bin/node server.js
 Environment=PORT=3040
 Environment=PUBLIC_BASE=https://cam.example.com
 # RELAY_TOKEN=<registration code for cameras>
+# UI_SIGN_KEY=<key the firmware's web pages are signed with>
+# UI_SIGN_ENFORCE=1
 EnvironmentFile=/opt/cam-relay/.env
 Restart=always
 RestartSec=3

@@ -121,14 +121,15 @@ const EN = {
     "Забагато невдалих спроб. Спробуйте через {n} с.": "Too many failed attempts. Try again in {n} s.",
     "Невірне ім'я користувача або пароль.": "Wrong user name or password.",
     "Забули пароль?": "Forgot the password?",
-    "Натисніть кнопку RST на камері тричі поспіль, з паузою приблизно в секунду. Камера увімкне власну мережу Wi-Fi «{x}». Підключіться до неї та задайте новий пароль. Записи при цьому збережуться.":
-        "Press the RST button on the camera three times in a row, about a second apart. The camera turns on its own Wi-Fi network “{x}”. Connect to it and set a new password. Recordings are kept.",
+    "Натисніть кнопку RST на камері тричі поспіль, з паузою приблизно в секунду. Камера на 15 хвилин увімкне власну мережу Wi-Fi «{x}» без пароля. Підключіться до неї та задайте новий пароль. Записи збережуться, а запам'ятовані обличчя, входи на інших пристроях і посилання для віддаленого доступу буде скинуто.":
+        "Press the RST button on the camera three times in a row, about a second apart. For 15 minutes the camera turns on its own Wi-Fi network “{x}” without a password. Connect to it and set a new password. Recordings are kept; remembered faces, logins on other devices and the remote access link are reset.",
 
     // setup wizard
     "Крок {n} з {m}": "Step {n} of {m}",
     "Відновлення доступу": "Restore access",
     "Вітаємо!": "Welcome!",
-    "Тут можна задати новий логін і пароль та змінити мережу Wi-Fi. Записи на карті пам'яті збережуться.": "Here you can set a new login and password and change the Wi-Fi network. Recordings on the memory card are kept.",
+    "Тут можна задати новий логін і пароль та змінити мережу Wi-Fi. Записи на карті пам'яті збережуться, а запам'ятовані обличчя, входи на інших пристроях і посилання для віддаленого доступу буде скинуто. Завершіть протягом {n} хв.":
+        "Here you can set a new login and password and change the Wi-Fi network. Recordings on the memory card are kept; remembered faces, logins on other devices and the remote access link are reset. Finish within {n} min.",
     "Налаштуймо вашу камеру. Це займе кілька хвилин.": "Let's set up your camera. It takes a few minutes.",
     "Підключимо камеру до домашнього Wi-Fi": "Connect the camera to your home Wi-Fi",
     "Створимо логін і пароль для входу": "Create a login and password",
@@ -467,8 +468,8 @@ const EN = {
     "Перезавантажити камеру?": "Restart the camera?",
     "Перезавантажити": "Restart",
     "Камера перезавантажується…": "The camera is restarting…",
-    "Забули пароль? Натисніть кнопку RST на камері тричі поспіль — вона увімкне власну мережу Wi-Fi, де можна задати новий пароль. Записи збережуться.":
-        "Forgot the password? Press RST on the camera three times in a row. It turns on its own Wi-Fi network where you can set a new password. Recordings are kept.",
+    "Забули пароль? Натисніть кнопку RST на камері тричі поспіль — вона на 15 хвилин увімкне власну мережу Wi-Fi, де можна задати новий пароль. Записи збережуться, а обличчя, входи й посилання для віддаленого доступу буде скинуто.":
+        "Forgot the password? Press RST on the camera three times in a row. For 15 minutes it turns on its own Wi-Fi network where you can set a new password. Recordings are kept; faces, logins and the remote access link are reset.",
     "Працює {u} · Вільна пам'ять {h} КБ / {p} КБ · {w}×{hh}, {f} кадр/с": "Up {u} · Free memory {h} KB / {p} KB · {w}×{hh}, {f} fps",
     "Оновлення прошивки": "Firmware update",
     "Не вимикайте камеру й не закривайте сторінку.": "Don't switch off the camera or close the page.",
@@ -563,4 +564,16 @@ const EN = {
     "На пристрої {d} доведеться увійти знову.": "{d} will have to log in again.",
     "Пристрій вийшов з камери": "The device was logged out",
     "Входів ще не було.": "No logins yet.",
+
+    // password again before risky changes
+    "Підтвердити": "Confirm",
+    "Підтвердіть паролем": "Confirm with your password",
+    "Це важлива зміна, тому камера просить пароль ще раз.": "This is an important change, so the camera asks for your password again.",
+    "Забагато невдалих спроб, спробуйте пізніше": "Too many failed attempts, try again later",
+
+    // the camera's own Wi-Fi
+    "Власна мережа камери": "The camera's own network",
+    "Пароль: ": "Password: ",
+    "Камера вмикає цю мережу, коли не може підключитися до домашньої. Запишіть пароль: він знадобиться, щоб змінити мережу Wi-Fi без домашнього інтернету.":
+        "The camera turns this network on when it can't reach your home Wi-Fi. Write the password down: you'll need it to change the Wi-Fi network when the home one is gone.",
 };

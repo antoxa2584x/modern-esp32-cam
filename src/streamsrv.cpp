@@ -6,6 +6,7 @@
 
 #include "auth.h"
 #include "camera.h"
+#include "netmgr.h"
 
 namespace streamsrv {
 static const int MAX_CLIENTS = 4;
@@ -94,7 +95,11 @@ static String corsHeaders(const String& req) {
     return "Access-Control-Allow-Origin: " + origin + "\r\nAccess-Control-Allow-Credentials: true\r\nVary: Origin\r\n";
 }
 
-static void stream(int fd, int maxFps, const String& req) {
+// The session is checked again this often while video runs, so logging out,
+// ending a session or a new password stops it
+static const uint32_t RECHECK_MS = 5000;
+
+static void stream(int fd, int maxFps, const String& req, const String& sid) {
     String head =
         "HTTP/1.1 200 OK\r\n"
         "Content-Type: multipart/x-mixed-replace; boundary=frame\r\n"
@@ -106,9 +111,13 @@ static void stream(int fd, int maxFps, const String& req) {
     size_t cap = 0;
     uint32_t seq = 0;
     uint32_t minGap = 1000 / constrain(maxFps, 1, 15);
-    uint32_t last = 0;
+    uint32_t last = 0, checked = millis();
     cam::addViewer();
     while (!paused()) {
+        if (millis() - checked > RECHECK_MS) {
+            if (!auth::valid(sid)) break;
+            checked = millis();
+        }
         uint32_t since = millis() - last;
         if (since < minGap) vTaskDelay(pdMS_TO_TICKS(minGap - since));
         size_t len = cam::waitFrame(buf, cap, seq, 3000);
@@ -155,14 +164,16 @@ static void snapshot(int fd, const String& req) {
 }
 
 static void serve(int fd) {
-    struct timeval tv = {5, 0};
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    struct timeval rtv = {2, 0}, stv = {5, 0};
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rtv, sizeof(rtv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &stv, sizeof(stv));
 
-    // Read the request head
+    // Read the request head; a client sending it a byte at a time must not
+    // hold one of the few workers for long
     String req;
     char b[256];
-    while (req.length() < 3072 && req.indexOf("\r\n\r\n") < 0) {
+    uint32_t started = millis();
+    while (req.length() < 3072 && req.indexOf("\r\n\r\n") < 0 && millis() - started < 5000) {
         int n = recv(fd, b, sizeof(b) - 1, 0);
         if (n <= 0) break;
         b[n] = 0;
@@ -172,14 +183,23 @@ static void serve(int fd) {
     String path = sp1 > 0 && sp2 > sp1 ? req.substring(sp1 + 1, sp2) : "";
     String base = path.substring(0, path.indexOf('?') < 0 ? path.length() : path.indexOf('?'));
 
-    if (!req.startsWith("GET ")) {
+    struct sockaddr_in peer = {};
+    socklen_t plen = sizeof(peer);
+    bool relay = getpeername(fd, (struct sockaddr*)&peer, &plen) == 0 && peer.sin_addr.s_addr == htonl(INADDR_LOOPBACK);
+    String sid = cookieValue(req, "sid");
+
+    if (req.indexOf("\r\n\r\n") < 0) {
+        reply(fd, "408 Request Timeout", "");
+    } else if (!req.startsWith("GET ")) {
         reply(fd, "405 Method Not Allowed", "");
-    } else if (!auth::valid(cookieValue(req, "sid"))) {
+    } else if (!net::ownHost(headerValue(req, "Host"), relay)) {
+        reply(fd, "421 Misdirected Request", "");
+    } else if (!auth::valid(sid)) {
         reply(fd, "401 Unauthorized", "login required");
     } else if (paused()) {
         reply(fd, "503 Service Unavailable", "updating");
     } else if (base == "/stream") {
-        stream(fd, queryInt(path, "fps", 15), req);
+        stream(fd, queryInt(path, "fps", 15), req, sid);
     } else if (base == "/snapshot") {
         snapshot(fd, req);
     } else {

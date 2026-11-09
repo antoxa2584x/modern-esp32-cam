@@ -95,6 +95,10 @@ String randomToken(size_t chars);  // [a-z0-9]
 String wifiSsid();
 String wifiPass();
 void setWifi(const String& ssid, const String& pass);
+// Password of the camera's own Wi-Fi once it is set up (random, made on
+// first use; shown in Settings -> Wi-Fi)
+String apPassword();
+void newApPassword();
 
 // Counts boots in quick succession (for the triple-reset recovery mode).
 uint32_t bootCount();

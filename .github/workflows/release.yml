@@ -49,8 +49,12 @@ jobs:
       run: pip install platformio
 
     # No RELAY_HOST/RELAY_TOKEN here: released firmware has no relay baked in,
-    # each user enters their own server in Settings -> Remote access
+    # each user enters their own server in Settings -> Remote access.
+    # UI_SIGN_KEY signs the web pages for relays that check them (a repository
+    # secret; without it the pages are unsigned and work at home only).
     - name: Build both boards
+      env:
+        UI_SIGN_KEY: ${{ secrets.UI_SIGN_KEY }}
       run: pio run -e esp32s3cam -e esp32cam
 
     - name: Make the release files

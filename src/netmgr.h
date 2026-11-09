@@ -10,8 +10,15 @@ void begin();
 void loop();
 
 bool setupMode();     // no Wi-Fi configured yet
-bool recoveryMode();  // triple reset: login and Wi-Fi may be set again
+// Triple reset: login and Wi-Fi may be set again, from the camera's own
+// Wi-Fi only, for 15 minutes after the start
+bool recoveryMode();
+uint32_t recoverySecondsLeft();
 bool apActive();
+bool fromAp(const IPAddress& ip);  // a device connected to the camera's own Wi-Fi
+// The name a request was sent to is one of the camera's own (its address,
+// camera-xxxx.local, 192.168.4.1; "camera" through the relay)
+bool ownHost(String host, bool viaRelay);
 bool staConnected();
 String apSsid();
 String hostname();  // camera-xxxx (mDNS: camera-xxxx.local)

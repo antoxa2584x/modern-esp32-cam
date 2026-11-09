@@ -23,6 +23,7 @@ void applySettings();  // after config::s.faces changed
 void startEnroll(const String& name);
 void cancelEnroll();
 bool forget(uint32_t uid);  // removes one remembered photo
+void forgetAll();           // every remembered person and every sighting (recovery)
 
 // People, enrolment progress and the recent sightings
 void info(JsonObject out);

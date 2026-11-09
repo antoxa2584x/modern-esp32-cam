@@ -591,6 +591,28 @@ bool forget(uint32_t uid) {
     return found;
 }
 
+void forgetAll() {
+    std::vector<String> drop;
+    lock();
+    for (int i = 0; i < MAX_PEOPLE; i++)
+        if (used[i]) {
+            used[i] = false;
+            toDelete.push_back(libId[i]);
+            saveReq = true;
+        }
+    for (int k = 0; k < evCount; k++) {
+        free(events[k].jpg);
+        if (events[k].onCard) drop.push_back(eventPath(events[k].seq));
+    }
+    memset(events, 0, sizeof(Event) * MAX_EVENTS);
+    evHead = evCount = 0;
+    nextSeq++;
+    unlock();
+    if (!store::mounted()) return;
+    for (auto& p : drop) store::fs().remove(p);
+    store::fs().remove(FACE_LOG);
+}
+
 void info(JsonObject o) {
     o["available"] = available();
     o["enabled"] = config::s.faces.enabled;
@@ -683,6 +705,7 @@ uint32_t eventSeq() { return 0; }
 void startEnroll(const String&) {}
 void cancelEnroll() {}
 bool forget(uint32_t) { return false; }
+void forgetAll() {}
 void info(JsonObject o) { o["available"] = false; }
 void live(JsonObject o) { o["faces"].to<JsonArray>(); }
 std::shared_ptr<std::vector<uint8_t>> photo(uint32_t) { return nullptr; }

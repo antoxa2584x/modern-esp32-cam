@@ -291,6 +291,7 @@ ${stamp}
         if (!authed()) return [401, { error: 'auth' }];
 
         if (path === 'status') return ok(status());
+        if (path === 'confirm') return ok(post ? { ok: true } : { left: 600 });
         if (path === 'settings') {
             if (post) {
                 if (body.remote && body.remote.token) { delete body.remote.token; state.settings.remote.tokenSet = true; }

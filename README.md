@@ -148,15 +148,19 @@ at address 0x0). Released firmware has no relay baked in.
 ### 3. Optional: preset your relay server
 
 To bake your remote-access server (and its registration code) into the firmware, set these
-before building — otherwise enter them in the web UI:
+before building — otherwise enter them in the web UI. `UI_SIGN_KEY` signs the web pages, so a
+relay with the same key serves them (see *Security model* below):
 
 ```powershell
-$env:RELAY_HOST="cam.example.com"; $env:RELAY_TOKEN="..."   # PowerShell
+$env:RELAY_HOST="cam.example.com"; $env:RELAY_TOKEN="..."; $env:UI_SIGN_KEY="..."   # PowerShell
 ```
 
 ```bash
-export RELAY_HOST=cam.example.com RELAY_TOKEN=...           # bash
+export RELAY_HOST=cam.example.com RELAY_TOKEN=... UI_SIGN_KEY=...                   # bash
 ```
+
+Release builds (`.github/workflows/release.yml`) take `UI_SIGN_KEY` from the repository secret
+of that name.
 
 > 🔒 Keep your own values out of the repository: `local/` is git-ignored and is the place for
 > personal build scripts and server-specific config.
@@ -165,8 +169,8 @@ export RELAY_HOST=cam.example.com RELAY_TOKEN=...           # bash
 
 | Situation | What happens |
 | --- | --- |
-| **Forgot the password** | Press **RST three times** in a row (about a second apart). The camera reopens `ESP32-Camera-XXXX`, where you can set a new login (and Wi-Fi). Recordings are kept. |
-| **Home Wi-Fi is down** | After a minute the camera opens `ESP32-Camera-XXXX` so it can still be reached (login required), and closes it once the home network is back. |
+| **Forgot the password** | Press **RST three times** in a row (about a second apart). For 15 minutes the camera opens `ESP32-Camera-XXXX` without a password; from that network (not from home or the internet) you can set a new login and Wi-Fi. Recordings are kept; remembered faces, other logins and the remote link are reset, since whoever does this may not be the owner. |
+| **Home Wi-Fi is down** | After a minute the camera opens `ESP32-Camera-XXXX` so it can still be reached, and closes it once the home network is back. That network has its own password, shown in **Settings → Wi-Fi** (write it down). |
 | **Moving to another Wi-Fi** | With the old network still around: **Settings → Wi-Fi**; if the new one fails within 25 s the camera returns to the old one. Somewhere new: wait a minute, join `ESP32-Camera-XXXX`, log in and pick the new network. The remote link stays the same. |
 | **Picture upside down** | **Settings → Picture**: turn on both *Flip* and *Mirror* (a 180° turn on the sensor, so recordings and face recognition get it upright too). *Rotation on screen* only turns the picture in the browser. |
 
@@ -187,6 +191,12 @@ link `https://<server>/cam/<id>/`.
 
 - **Own subdomain** (e.g. `cam.example.com`) — camera pages run JavaScript, so they must never
   share an origin with a site that has its own logins.
+- **Signed pages** — all cameras share that origin, so a fake camera (one that got the
+  registration code out of a real camera's flash) could serve scripts that use another camera's
+  login in the same browser. Page files (everything outside `/api/`, `/stream`, `/snapshot`) must
+  carry the build's HMAC signature (`UI_SIGN_KEY` at build time and on the relay); everything else
+  is sent with `Content-Security-Policy: sandbox`. With `UI_SIGN_ENFORCE=1` unsigned pages are
+  refused; without it they are only logged (for switching cameras over).
 - **Registration code** — `RELAY_TOKEN` on the server, *Registration code* on the camera (or baked
   in at build time). Strangers can't register cameras; the relay refuses to start without it.
 - **Ownership** — the first camera that connects with an id owns it (key stored hashed in
@@ -194,14 +204,22 @@ link `https://<server>/cam/<id>/`.
 - **Header allowlist both ways** — only the camera's `sid` cookie passes, locked to
   `/cam/<id>/` (`HttpOnly`, `Secure`, `SameSite=Strict`). The relay adds CSP,
   `X-Frame-Options: DENY` and `Referrer-Policy: no-referrer` (the link is the secret, so it must not leak).
-- **Password guessing** — 10 login tries per 15 min per address at the relay, plus the camera's
-  own lockout, counted separately for remote and home logins (an attacker can't lock you out
-  at home). Passwords need 8+ characters and common ones are refused. Sessions expire after
-  30 days. Setup without a login (first setup, RST×3 recovery) never works through the relay.
+- **Password guessing** — 10 password tries per 15 min per address at the relay (login,
+  confirmation, password change), plus the camera's own lockout per address: a stranger can't
+  lock you out. Many wrong passwords from many addresses stop new addresses for an hour; ones
+  that logged in before still may. Passwords need 8+ characters and common ones are refused;
+  the camera stores a PBKDF2 hash and only hashes of session tokens. Sessions expire after 30 days.
+- **Password again** — firmware updates, Wi-Fi and remote-access changes and deleting every
+  recording need the password typed again (good for 10 minutes), so a stolen session alone can't
+  make them. Logging out, ending a session or a new password also stops live video within 5 s.
+- **Setup** — without a login (first setup, RST×3 recovery) it never works through the relay;
+  recovery only from the camera's own Wi-Fi, for 15 minutes after the start.
+- **Home network** — the camera answers only to its own names (its address, `camera-xxxx.local`,
+  `192.168.4.1`), so a web page can't reach it by pointing its own name at the camera (DNS rebinding).
 - **Transport** — TLS from the browser to the server, and from the camera to the server
   (certificate checked against the built-in root list).
 
-`node relay/test/security.js` checks all of the relay part (18 checks).
+`node relay/test/security.js` checks all of the relay part (32 checks).
 
 </details>
 
@@ -210,14 +228,15 @@ link `https://<server>/cam/<id>/`.
 
 1. **DNS** — point a subdomain (e.g. `cam.example.com`) at the server.
 2. **App** — copy `server.js`, `package.json`, `package-lock.json` to `/opt/cam-relay`, run
-   `npm ci --omit=dev`, and write `RELAY_TOKEN=<long random code>` into `/opt/cam-relay/.env` (`chmod 600`).
+   `npm ci --omit=dev`, and write `RELAY_TOKEN=<long random code>`, `UI_SIGN_KEY=<the key your
+   firmware is built with>` and `UI_SIGN_ENFORCE=1` into `/opt/cam-relay/.env` (`chmod 600`).
 3. **Service** — adjust and install `cam-relay.service` into `/etc/systemd/system/`, then
    `systemctl enable --now cam-relay`.
 4. **nginx** — adjust and install `nginx-cam.conf` as a site, get a certificate for the subdomain,
    `nginx -t`, `systemctl reload nginx`.
 
-Behind Cloudflare, the relay reads the visitor's address from `CF-Connecting-IP` — then only
-accept Cloudflare's addresses on ports 80/443, or that header can be faked.
+Behind Cloudflare, the relay reads the visitor's address from `CF-Connecting-IP`, but only when
+the connection nginx got came from one of Cloudflare's addresses.
 
 Log: `/opt/cam-relay/relay.log`.
 

@@ -85,9 +85,55 @@ async function api(path, body, opts = {}) {
     try { data = await res.json(); } catch (e) { /* not JSON */ }
     if (!res.ok) {
         if (res.status === 401 && !opts.noAuthRedirect) onAuthLost();
+        if (res.status === 403 && data && data.error === 'confirm' && !opts.confirmed && await askPassword())
+            return api(path, body, { ...opts, confirmed: true });
         throw new ApiError(res.status, data);
     }
     return data;
+}
+
+// Risky changes (firmware, Wi-Fi, remote access, deleting every recording)
+// need the password again; the camera then trusts this device for 10 minutes.
+// Resolves to true once confirmed, false if cancelled.
+function askPassword() {
+    return new Promise(resolve => {
+        let ok = false;
+        const pw = passwordInput({ required: true });
+        const err = h('div', { class: 'form-error hidden', role: 'alert' });
+        const btn = h('button', { class: 'btn primary', type: 'submit' }, t('Підтвердити'));
+        const form = h('form', {
+            class: 'stack', onsubmit: async e => {
+                e.preventDefault();
+                btn.disabled = true;
+                err.classList.add('hidden');
+                try {
+                    await api('api/confirm', { password: pw.input.value }, { confirmed: true });
+                    ok = true;
+                    close();
+                } catch (ex) {
+                    const d = ex.data || {};
+                    err.textContent = d.error === 'locked' ? t('Забагато невдалих спроб. Спробуйте через {n} с.', { n: d.wait })
+                        : d.error === 'wrong' ? t('Невірний пароль') : ex.message;
+                    err.classList.remove('hidden');
+                    btn.disabled = false;
+                }
+            }
+        }, field(t('Пароль'), pw.el), err,
+            h('div', { class: 'actions' }, h('button', { type: 'button', class: 'btn', onclick: () => close() }, t('Скасувати')), btn));
+        const d = h('div', { class: 'dialog', role: 'dialog', 'aria-modal': 'true' },
+            h('h2', { text: t('Підтвердіть паролем') }),
+            h('p', { class: 'muted', text: t('Це важлива зміна, тому камера просить пароль ще раз.') }),
+            form);
+        const close = overlay(d, { onClose: () => resolve(ok) });
+        pw.input.focus();
+    });
+}
+
+// Asks for the password first if the camera would (for uploads, which
+// shouldn't be sent only to be refused)
+async function ensureConfirmed() {
+    const c = await api('api/confirm');
+    return c.left > 60 || askPassword();
 }
 
 function fmtDur(sec) {
@@ -501,7 +547,7 @@ function selectText(el) {
 }
 
 function showError(e) {
-    if (e instanceof ApiError && e.status === 401) return;
+    if (e instanceof ApiError && (e.status === 401 || e.data.error === 'confirm')) return;
     toast(e instanceof ApiError ? e.message : t('Немає зв\'язку з камерою'), true);
 }
 
@@ -740,7 +786,7 @@ function loginPage(app) {
         form,
         h('details', { class: 'fold' },
             h('summary', null, icon('chevron', 'sm'), t('Забули пароль?')),
-            h('p', { class: 'muted small', text: t('Натисніть кнопку RST на камері тричі поспіль, з паузою приблизно в секунду. Камера увімкне власну мережу Wi-Fi «{x}». Підключіться до неї та задайте новий пароль. Записи при цьому збережуться.', { x: info.apSsid || 'ESP32-Camera-…' }) })))));
+            h('p', { class: 'muted small', text: t('Натисніть кнопку RST на камері тричі поспіль, з паузою приблизно в секунду. Камера на 15 хвилин увімкне власну мережу Wi-Fi «{x}» без пароля. Підключіться до неї та задайте новий пароль. Записи збережуться, а запам\'ятовані обличчя, входи на інших пристроях і посилання для віддаленого доступу буде скинуто.', { x: info.apSsid || 'ESP32-Camera-…' }) })))));
     (user.value ? pw.input : user).focus();
 }
 
@@ -761,7 +807,7 @@ function wizard(app) {
         card.replaceChildren(langSwitch(), dots(1),
             h('img', { class: 'auth-logo', src: 'icon.svg', alt: '' }),
             h('h1', { text: recovery ? t('Відновлення доступу') : t('Вітаємо!') }),
-            h('p', { class: 'lead', text: recovery ? t('Тут можна задати новий логін і пароль та змінити мережу Wi-Fi. Записи на карті пам\'яті збережуться.') : t('Налаштуймо вашу камеру. Це займе кілька хвилин.') }),
+            h('p', { class: 'lead', text: recovery ? t('Тут можна задати новий логін і пароль та змінити мережу Wi-Fi. Записи на карті пам\'яті збережуться, а запам\'ятовані обличчя, входи на інших пристроях і посилання для віддаленого доступу буде скинуто. Завершіть протягом {n} хв.', { n: Math.max(1, Math.ceil((info.recoveryLeft || 0) / 60)) }) : t('Налаштуймо вашу камеру. Це займе кілька хвилин.') }),
             h('ol', { class: 'howto' },
                 h('li', { text: t('Підключимо камеру до домашнього Wi-Fi') }),
                 h('li', { text: t('Створимо логін і пароль для входу') }),
@@ -1771,8 +1817,8 @@ function homePage() {
         h('div', { class: 'page-head' }, h('h1', { text: t('Головна') })),
         banners,
         h('div', { class: 'home-grid' },
-            h('div', null, liveCard),
-            h('div', { class: 'home-side' }, secCard, loginsCard, statsCard, facesCard, recentCard)));
+            h('div', { class: 'home-main' }, liveCard, facesCard, recentCard),
+            h('div', { class: 'home-side' }, secCard, loginsCard, statsCard)));
 
     // Seconds since the last motion. The camera forgets it on restart: then
     // the end of the newest motion clip counts.
@@ -2453,7 +2499,7 @@ function settingsPage() {
                     try { await api('api/reboot', {}); waitForRestart(t('Камера перезавантажується…')); } catch (e) { showError(e); }
                 }
             }, icon('power', 'sm'), t('Перезавантажити'))),
-        h('p', { class: 'tip', style: { marginTop: '10px' } }, icon('alert', 'sm'), t('Забули пароль? Натисніть кнопку RST на камері тричі поспіль — вона увімкне власну мережу Wi-Fi, де можна задати новий пароль. Записи збережуться.')),
+        h('p', { class: 'tip', style: { marginTop: '10px' } }, icon('alert', 'sm'), t('Забули пароль? Натисніть кнопку RST на камері тричі поспіль — вона на 15 хвилин увімкне власну мережу Wi-Fi, де можна задати новий пароль. Записи збережуться, а обличчя, входи й посилання для віддаленого доступу буде скинуто.')),
         sysInfo);
 
     function themeRow() {
@@ -2471,7 +2517,10 @@ function settingsPage() {
             h('div', { class: 'swatches', role: 'group', 'aria-label': t('Оформлення') }, btns));
     }
 
-    function uploadFirmware(file) {
+    async function uploadFirmware(file) {
+        try {
+            if (!await ensureConfirmed()) { fwFile.value = ''; return; }
+        } catch (e) { fwFile.value = ''; return showError(e); }
         const bar = h('div');
         const label = h('p', { class: 'muted', text: t('Завантаження…') });
         const d = h('div', { class: 'dialog' }, h('h2', { text: t('Оновлення прошивки') }), label, h('div', { class: 'progress', style: { marginTop: '14px' } }, bar),
@@ -2540,11 +2589,15 @@ function settingsPage() {
                 st.wifi.connected ? h('span', { class: 'row small muted' }, signalBars(st.wifi.rssi), signalText(st.wifi.rssi)) : null),
             st.wifi.connected ? h('div', null, h('div', { class: 'faint', text: t('Адреса камери вдома') }),
                 h('div', { class: 'value mono', text: `http://${st.wifi.ip}/` }),
-                h('div', { class: 'faint small', text: t('або {x}', { x: `http://${st.wifi.host}/` }) })) : null);
+                h('div', { class: 'faint small', text: t('або {x}', { x: `http://${st.wifi.host}/` }) })) : null,
+            S.apPassword ? h('div', null, h('div', { class: 'faint', text: t('Власна мережа камери') }),
+                h('div', { class: 'value', text: S.apSsid }),
+                h('div', { class: 'small muted' }, t('Пароль: '), h('span', { class: 'mono', text: S.apPassword })),
+                h('p', { class: 'tip', style: { marginTop: '8px' } }, icon('wifi', 'sm'), t('Камера вмикає цю мережу, коли не може підключитися до домашньої. Запишіть пароль: він знадобиться, щоб змінити мережу Wi-Fi без домашнього інтернету.'))) : null);
         remoteState.className = 'pill ' + (st.remote.state === 'online' ? 'ok' : st.remote.state.startsWith('error') || st.remote.state === 'unreachable' ? 'bad' : 'warn');
         remoteState.replaceChildren(h('span', { class: 'dot' }), remoteStateText(st.remote.state));
         linkText.textContent = st.remote.url;
-        linkBox.querySelector('a').href = st.remote.url;
+        linkBox.querySelector('a').href = /^https?:\/\//.test(st.remote.url) ? st.remote.url : '#';
         newUser.placeholder = info.user || '';
         if (!newUser.value && info.user) newUser.value = info.user;
         sdInfo.replaceChildren(h('b', { text: t('Карта пам\'яті') }),

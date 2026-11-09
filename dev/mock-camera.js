@@ -23,6 +23,7 @@ const FRAMES = fs.readdirSync(path.join(__dirname, 'frames')).sort().map(f => fs
 let configured = !process.env.SETUP;
 let user = 'admin', password = '123456';
 const sessions = new Set();
+const confirmedUntil = new Map(); // sid -> ms the password confirmation lasts until
 let lamp = 0, manual = false, recStart = 0;
 let clockSet = true;
 const settings = {
@@ -171,13 +172,22 @@ async function api(req, res, url) {
         const list = [...sessionInfo].sort((a, b) => b[1].at - a[1].at).map(([t, s]) => ({ ...s, current: t === mine || undefined }));
         return json(res, 200, { sessions: list, history: loginHistory });
     }
+    // The password again before risky changes, like the camera (10 minutes)
+    if (p === '/api/confirm') {
+        if (!post) return json(res, 200, { left: Math.max(0, Math.round((confirmedUntil.get(cookieSid(req)) || 0) - Date.now()) / 1000 | 0) });
+        if ((await body(req)).password !== password) return json(res, 403, { error: 'wrong', wait: 0 });
+        confirmedUntil.set(cookieSid(req), Date.now() + 600000);
+        return json(res, 200, { ok: true });
+    }
+    const confirmed = () => (confirmedUntil.get(cookieSid(req)) || 0) > Date.now();
     if (p === '/api/settings') {
         if (post) {
             const b = await body(req);
+            if (b.remote && !confirmed()) return json(res, 403, { error: 'confirm', message: 'Підтвердіть паролем' });
             if (b.remote && b.remote.token) { delete b.remote.token; settings.remote.tokenSet = true; }
             merge(settings, b);
         }
-        return json(res, 200, { ...settings, ...SENSOR });
+        return json(res, 200, { ...settings, ...SENSOR, apSsid: 'ESP32-Camera-A1B2', apPassword: 'k7mq4xr2tw' });
     }
     if (p === '/api/security' && post) { settings.security = !!(await body(req)).on; return json(res, 200, { ok: true }); }
     if (p === '/api/lamp' && post) { lamp = (await body(req)).level | 0; return json(res, 200, { ok: true }); }
@@ -249,7 +259,7 @@ async function api(req, res, url) {
         return json(res, 200, { ok: true });
     }
     if (p === '/api/remote/new-id' && post) { settings.remote.id = Math.random().toString(36).slice(2, 12); return json(res, 200, { ok: true }); }
-    if (p === '/api/wifi' && post) return json(res, 200, { ok: true });
+    if (p === '/api/wifi' && post) return confirmed() ? json(res, 200, { ok: true }) : json(res, 403, { error: 'confirm', message: 'Підтвердіть паролем' });
     if (p === '/api/reboot' && post) return json(res, 200, { ok: true });
     json(res, 404, { error: 'notfound' });
 }

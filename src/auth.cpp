@@ -12,8 +12,13 @@
 namespace auth {
 static const int MAX_SESSIONS = 8;
 static const int MAX_HISTORY = 16;
-static const int ITERATIONS = 2000;
+// Hashes made by older firmware used 2000; they are redone on the next login
+static const int ITERATIONS = 8000;
 static const uint32_t SESSION_SECONDS = 30 * 86400;
+static const uint32_t CONFIRM_MS = 10 * 60000;
+static const int MAX_TRIES = 16;           // addresses with wrong passwords remembered
+static const uint32_t GLOBAL_WINDOW_MS = 3600000;
+static const int GLOBAL_MAX = 30;          // wrong passwords an hour, all addresses together
 
 // Where a login came from. Fixed-size, so the lists are saved as NVS blobs.
 struct Where {
@@ -28,18 +33,34 @@ struct Where {
 struct Session {
     Where w;  // ip and place: where it was used from last
     uint32_t seen;
+    char tok[65];      // SHA-256 of the token, hex
+    uint32_t sudoMs;   // millis() of the last password confirmation, 0 = none
+};
+// As saved by firmware before 1.3 (token in clear)
+struct OldSession {
+    Where w;
+    uint32_t seen;
     char tok[41];
+};
+// Wrong passwords from one address (an IPv6 /64 counts as one)
+struct Tries {
+    char key[40];
+    uint8_t fails;
+    uint32_t until;  // millis() the lockout ends
+    uint32_t last;   // millis() of the last wrong password
 };
 
 static Preferences prefs;
 static String userName, hash, salt;
+static int iterations = ITERATIONS;
 static Session* sessions;  // newest first; in PSRAM
 static Where* history;     // newest first
 static uint32_t seq = 1;
 static uint32_t sessionsSavedAt = 0, historySavedMs = 0;
 static bool historyDirty = false;
-static int fails[2] = {0, 0};  // [local, remote]
-static uint32_t lockedUntil[2] = {0, 0};
+static Tries tries[MAX_TRIES];
+static uint32_t globalFrom[2] = {0, 0};  // [local, remote]
+static int globalFails[2] = {0, 0};
 static SemaphoreHandle_t mtx;
 
 static String hex(const uint8_t* b, size_t n) {
@@ -53,14 +74,20 @@ static String hex(const uint8_t* b, size_t n) {
     return s;
 }
 
-static String derive(const String& pass, const String& saltHex) {
+static String derive(const String& pass, const String& saltHex, int iter) {
     uint8_t out[32];
     mbedtls_md_context_t ctx;
     mbedtls_md_init(&ctx);
     mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), 1);
     mbedtls_pkcs5_pbkdf2_hmac(&ctx, (const uint8_t*)pass.c_str(), pass.length(), (const uint8_t*)saltHex.c_str(),
-                              saltHex.length(), ITERATIONS, sizeof(out), out);
+                              saltHex.length(), iter, sizeof(out), out);
     mbedtls_md_free(&ctx);
+    return hex(out, sizeof(out));
+}
+
+static String sha256Hex(const String& s) {
+    uint8_t out[32];
+    mbedtls_md(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), (const uint8_t*)s.c_str(), s.length(), out);
     return hex(out, sizeof(out));
 }
 
@@ -114,7 +141,7 @@ static void fill(Where& w, const Client& c) {
 }
 
 static void saveSessions() {
-    prefs.putBytes("sess2", sessions, sizeof(Session) * MAX_SESSIONS);
+    prefs.putBytes("sess3", sessions, sizeof(Session) * MAX_SESSIONS);
     sessionsSavedAt = now();
 }
 
@@ -159,48 +186,54 @@ void begin() {
     userName = prefs.getString("user", "");
     hash = prefs.getString("hash", "");
     salt = prefs.getString("salt", "");
+    iterations = prefs.getInt("iter", 2000);
     if (prefs.getBytesLength("hist") == sizeof(Where) * MAX_HISTORY)
         prefs.getBytes("hist", history, sizeof(Where) * MAX_HISTORY);
-    if (prefs.getBytesLength("sess2") == sizeof(Session) * MAX_SESSIONS) {
-        prefs.getBytes("sess2", sessions, sizeof(Session) * MAX_SESSIONS);
+    if (prefs.getBytesLength("sess3") == sizeof(Session) * MAX_SESSIONS) {
+        prefs.getBytes("sess3", sessions, sizeof(Session) * MAX_SESSIONS);
+        for (int i = 0; i < MAX_SESSIONS; i++) sessions[i].sudoMs = 0;
         return;
     }
-    // Sessions saved by older firmware: "token:issued,..."
-    String all = prefs.getString("sess", "");
-    int i = 0, from = 0;
-    while (i < MAX_SESSIONS) {
-        int c = all.indexOf(',', from);
-        if (c < 0) break;
-        String item = all.substring(from, c);
-        int colon = item.indexOf(':');
-        String tok = colon < 0 ? item : item.substring(0, colon);
-        if (tok.length() == 40) {
-            Session& s = sessions[i++];
-            strlcpy(s.tok, tok.c_str(), sizeof(s.tok));
-            s.w.at = colon < 0 ? 0 : item.substring(colon + 1).toInt();
-            s.w.id = esp_random() | 1;
+    // Sessions saved by older firmware kept the tokens in clear: keep their hashes
+    if (prefs.getBytesLength("sess2") == sizeof(OldSession) * MAX_SESSIONS) {
+        auto* old = (OldSession*)psCalloc(MAX_SESSIONS, sizeof(OldSession));
+        if (old) {
+            prefs.getBytes("sess2", old, sizeof(OldSession) * MAX_SESSIONS);
+            for (int i = 0; i < MAX_SESSIONS; i++) {
+                if (!old[i].tok[0]) continue;
+                sessions[i].w = old[i].w;
+                sessions[i].seen = old[i].seen;
+                strlcpy(sessions[i].tok, sha256Hex(old[i].tok).c_str(), sizeof(sessions[i].tok));
+            }
+            free(old);
         }
-        from = c + 1;
     }
     saveSessions();
+    prefs.remove("sess2");
     prefs.remove("sess");
 }
 
 bool configured() { return userName.length() && hash.length(); }
 String user() { return userName; }
 
-void setCredentials(const String& u, const String& p) {
+static void storeHash(const String& p) {
     uint8_t rnd[16];
     esp_fill_random(rnd, sizeof(rnd));
     salt = hex(rnd, sizeof(rnd));
-    hash = derive(p, salt);
-    userName = u;
-    prefs.putString("user", userName);
+    iterations = ITERATIONS;
+    hash = derive(p, salt, iterations);
     prefs.putString("salt", salt);
     prefs.putString("hash", hash);
+    prefs.putInt("iter", iterations);
 }
 
-bool checkPassword(const String& p) { return configured() && same(derive(p, salt), hash); }
+void setCredentials(const String& u, const String& p) {
+    userName = u;
+    prefs.putString("user", userName);
+    storeHash(p);
+}
+
+static bool passwordMatches(const String& p) { return configured() && same(derive(p, salt, iterations), hash); }
 
 const char* passwordProblem(const String& p) {
     if (p.length() < 8) return "Пароль має містити щонайменше 8 символів";
@@ -228,10 +261,88 @@ const char* passwordProblem(const String& p) {
     return nullptr;
 }
 
-uint32_t lockoutSeconds(bool remote) {
-    uint32_t t = millis(), until = lockedUntil[remote];
-    return until > t ? (until - t + 999) / 1000 : 0;
+// ---------- wrong passwords ----------
+
+// The address wrong passwords are counted for; an IPv6 /64 is one household
+static String keyOf(const String& ip) {
+    if (ip.indexOf(':') >= 0) {
+        int colons = 0;
+        for (int i = 0; i < (int)ip.length(); i++)
+            if (ip[i] == ':' && ++colons == 4) return ip.substring(0, i);
+    }
+    return ip;
 }
+
+// Caller holds mtx
+static Tries* triesOf(const String& key, bool create) {
+    uint32_t t = millis();
+    Tries* oldest = &tries[0];
+    for (auto& e : tries) {
+        // Forgiven a day after the last wrong password
+        if (e.key[0] && t - e.last > 86400000) memset(&e, 0, sizeof(e));
+        if (e.key[0] && key == e.key) return &e;
+        if (!e.key[0] || (oldest->key[0] && e.last < oldest->last)) oldest = &e;
+    }
+    if (!create) return nullptr;
+    memset(oldest, 0, sizeof(Tries));
+    strlcpy(oldest->key, key.c_str(), sizeof(oldest->key));
+    return oldest;
+}
+
+// Has this address logged in before? Caller holds mtx
+static bool known(const Client& c) {
+    String key = keyOf(c.ip);
+    if (!key.length()) return false;
+    for (int i = 0; i < MAX_SESSIONS; i++)
+        if (sessions[i].tok[0] && keyOf(sessions[i].w.ip) == key) return true;
+    for (int i = 0; i < MAX_HISTORY; i++)
+        if (history[i].id && keyOf(history[i].ip) == key) return true;
+    return false;
+}
+
+// Caller holds mtx
+static uint32_t lockedFor(const Client& c) {
+    uint32_t t = millis(), wait = 0;
+    Tries* e = triesOf(keyOf(c.ip), false);
+    if (e && (int32_t)(e->until - t) > 0) wait = (e->until - t + 999) / 1000;
+    int g = c.remote;
+    if (t - globalFrom[g] > GLOBAL_WINDOW_MS) globalFails[g] = 0;
+    if (globalFails[g] >= GLOBAL_MAX && !known(c))
+        wait = max(wait, (GLOBAL_WINDOW_MS - (t - globalFrom[g]) + 999) / 1000);
+    return wait;
+}
+
+// Caller holds mtx
+static void failed(const Client& c) {
+    uint32_t t = millis();
+    Tries* e = triesOf(keyOf(c.ip), true);
+    if (e->fails < 255) e->fails++;
+    e->last = t;
+    // Every 5 wrong tries: wait 30 s, then 60 s, ... (up to 10 min)
+    if (e->fails % 5 == 0) e->until = t + min(600, 30 * (e->fails / 5)) * 1000;
+    int g = c.remote;
+    if (!globalFails[g] || t - globalFrom[g] > GLOBAL_WINDOW_MS) {
+        globalFrom[g] = t;
+        globalFails[g] = 0;
+    }
+    globalFails[g]++;
+    addHistory(c, 0);
+}
+
+// Caller holds mtx
+static void succeeded(const Client& c) {
+    Tries* e = triesOf(keyOf(c.ip), false);
+    if (e) memset(e, 0, sizeof(Tries));
+}
+
+uint32_t lockoutSeconds(const Client& c) {
+    xSemaphoreTake(mtx, portMAX_DELAY);
+    uint32_t w = lockedFor(c);
+    xSemaphoreGive(mtx);
+    return w;
+}
+
+// ---------- sessions ----------
 
 // Caller holds mtx
 static String addSession(const Client& c) {
@@ -240,7 +351,7 @@ static String addSession(const Client& c) {
     memmove(&sessions[1], &sessions[0], sizeof(Session) * (MAX_SESSIONS - 1));
     Session& s = sessions[0];
     memset(&s, 0, sizeof(s));
-    strlcpy(s.tok, tok.c_str(), sizeof(s.tok));
+    strlcpy(s.tok, sha256Hex(tok).c_str(), sizeof(s.tok));
     s.w.at = s.seen = now();
     s.w.id = esp_random() | 1;
     s.w.count = 1;
@@ -250,25 +361,53 @@ static String addSession(const Client& c) {
     return tok;
 }
 
+// Caller holds mtx; nullptr if the token isn't a live session
+static Session* sessionOf(const String& token) {
+    if (token.length() != 40) return nullptr;
+    String h = sha256Hex(token);
+    uint32_t t = now();
+    for (int i = 0; i < MAX_SESSIONS; i++) {
+        Session& s = sessions[i];
+        if (!s.tok[0] || !same(s.tok, h)) continue;
+        if (s.w.at && t && t - s.w.at > SESSION_SECONDS) return nullptr;
+        return &s;
+    }
+    return nullptr;
+}
+
 String login(const String& u, const String& p, const Client& c, bool& lockedOut) {
-    lockedOut = lockoutSeconds(c.remote) > 0;
+    xSemaphoreTake(mtx, portMAX_DELAY);
+    lockedOut = lockedFor(c) > 0;
+    xSemaphoreGive(mtx);
     if (lockedOut) return "";
     // Always run the slow hash, so a wrong user name takes as long as a wrong password
-    bool passOk = checkPassword(p);
+    bool passOk = passwordMatches(p);
     xSemaphoreTake(mtx, portMAX_DELAY);
     if (!passOk || !u.equalsIgnoreCase(userName)) {
-        // Every 5 wrong tries: wait 30 s, then 60 s, ... (up to 10 min)
-        int& f = fails[c.remote];
-        if (++f % 5 == 0) lockedUntil[c.remote] = millis() + min(600, 30 * (f / 5)) * 1000;
-        addHistory(c, 0);
+        failed(c);
         xSemaphoreGive(mtx);
         return "";
     }
-    fails[c.remote] = 0;
+    succeeded(c);
     String tok = addSession(c);
     addHistory(c, sessions[0].w.id);
     xSemaphoreGive(mtx);
+    // A hash from older firmware: redo it with today's strength
+    if (iterations < ITERATIONS) storeHash(p);
     return tok;
+}
+
+bool checkPassword(const String& p, const Client& c, bool& lockedOut) {
+    xSemaphoreTake(mtx, portMAX_DELAY);
+    lockedOut = lockedFor(c) > 0;
+    xSemaphoreGive(mtx);
+    if (lockedOut) return false;
+    bool ok = passwordMatches(p);
+    xSemaphoreTake(mtx, portMAX_DELAY);
+    if (ok) succeeded(c);
+    else failed(c);
+    xSemaphoreGive(mtx);
+    return ok;
 }
 
 String newSession(const Client& c) {
@@ -280,12 +419,13 @@ String newSession(const Client& c) {
 
 bool valid(const String& token, const Client* c) {
     if (token.length() != 40) return false;
+    String h = sha256Hex(token);
     bool ok = false, dirty = false;
     uint32_t t = now();
     xSemaphoreTake(mtx, portMAX_DELAY);
     for (int i = 0; i < MAX_SESSIONS; i++) {
         Session& s = sessions[i];
-        if (!s.tok[0] || !same(s.tok, token)) continue;
+        if (!s.tok[0] || !same(s.tok, h)) continue;
         // A session made while the clock was unknown gets its date now
         if (!s.w.at && t) {
             s.w.at = t;
@@ -312,9 +452,11 @@ bool valid(const String& token, const Client* c) {
 
 void logout(const String& token) {
     xSemaphoreTake(mtx, portMAX_DELAY);
-    for (int i = 0; i < MAX_SESSIONS; i++)
-        if (token.length() == 40 && same(sessions[i].tok, token)) memset(&sessions[i], 0, sizeof(Session));
-    saveSessions();
+    Session* s = sessionOf(token);
+    if (s) {
+        memset(s, 0, sizeof(Session));
+        saveSessions();
+    }
     xSemaphoreGive(mtx);
 }
 
@@ -338,6 +480,39 @@ bool endSession(uint32_t id) {
     return found;
 }
 
+void confirm(const String& token) {
+    xSemaphoreTake(mtx, portMAX_DELAY);
+    Session* s = sessionOf(token);
+    if (s) s->sudoMs = millis() | 1;
+    xSemaphoreGive(mtx);
+}
+
+uint32_t confirmedSeconds(const String& token) {
+    uint32_t left = 0;
+    xSemaphoreTake(mtx, portMAX_DELAY);
+    Session* s = sessionOf(token);
+    if (s && s->sudoMs) {
+        uint32_t age = millis() - s->sudoMs;
+        if (age < CONFIRM_MS) left = max<uint32_t>(1, (CONFIRM_MS - age) / 1000);
+        else s->sudoMs = 0;
+    }
+    xSemaphoreGive(mtx);
+    return left;
+}
+
+bool confirmed(const String& token) { return confirmedSeconds(token) > 0; }
+
+void wipe() {
+    xSemaphoreTake(mtx, portMAX_DELAY);
+    memset(sessions, 0, sizeof(Session) * MAX_SESSIONS);
+    memset(history, 0, sizeof(Where) * MAX_HISTORY);
+    memset(tries, 0, sizeof(tries));
+    saveSessions();
+    saveHistory();
+    seq++;
+    xSemaphoreGive(mtx);
+}
+
 static void whereJson(JsonObject o, const Where& w) {
     o["at"] = w.at;
     o["ip"] = w.ip;
@@ -347,6 +522,7 @@ static void whereJson(JsonObject o, const Where& w) {
 }
 
 void toJson(JsonObject o, const String& token) {
+    String h = token.length() == 40 ? sha256Hex(token) : String();
     xSemaphoreTake(mtx, portMAX_DELAY);
     uint32_t t = now();
     JsonArray ss = o["sessions"].to<JsonArray>();
@@ -357,7 +533,7 @@ void toJson(JsonObject o, const String& token) {
         j["id"] = s.w.id;
         whereJson(j, s.w);
         j["seen"] = s.seen;
-        if (token.length() == 40 && same(s.tok, token)) j["current"] = true;
+        if (h.length() && same(s.tok, h)) j["current"] = true;
     }
     JsonArray hs = o["history"].to<JsonArray>();
     for (int i = 0; i < MAX_HISTORY; i++) {
