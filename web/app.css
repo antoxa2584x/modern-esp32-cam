@@ -532,13 +532,15 @@ main.content {
     font-size: 0.78rem;
     font-weight: 700;
     letter-spacing: 0.02em;
+    /* always over video on a dark scrim, so colors are fixed regardless of theme */
+    color: #fff;
     background: rgb(15 6 32 / 65%);
     backdrop-filter: blur(6px);
     -webkit-backdrop-filter: blur(6px);
 }
-.badge .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+.badge .dot { width: 8px; height: 8px; border-radius: 50%; background: #7ee2a8; }
 .badge.rec .dot { background: #ff4d6d; animation: blink 1.2s infinite; }
-.badge.motion { color: var(--warn); }
+.badge.motion { color: #ffd27a; }
 @keyframes blink { 50% { opacity: 0.25; } }
 
 .live-controls {
@@ -915,6 +917,8 @@ details.adv[open] summary svg { transform: rotate(90deg); }
 .steps { display: flex; gap: 6px; justify-content: center; margin-bottom: 22px; }
 .steps span { width: 28px; height: 6px; border-radius: 3px; background: rgb(var(--ov) / 15%); transition: background 0.2s; }
 .steps span.on { background: var(--accent); }
+/* Narrow cards: the corner language switch would overlap the step dots, so drop them below it */
+@media (max-width: 420px) { .auth-card > .lang-switch + .steps { margin-top: 36px; } }
 .net-list { display: flex; flex-direction: column; gap: 6px; max-height: 320px; overflow: auto; margin: 0 -4px; padding: 0 4px; }
 .net {
     display: flex;
